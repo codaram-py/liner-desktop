@@ -136,10 +136,19 @@ Search merges the Liner catalog with providers that run locally in the app:
 |---|---|---|
 | YouTube | full track | search, pasted video / playlist links and bare video ids, resolved in the Electron main process (`electron/youtube.ts`, `youtubei.js`) and streamed through a loopback proxy (`electron/youtubeProxy.ts`) |
 | SoundCloud | full track | search, pasted track / set links, progressive mp3 streams (`electron/soundcloud.ts`). GO+ snippets go to the Prévia category |
+| Spotify | full track via YouTube | search and pasted track / album / playlist links through the official Web API, metadata only. Needs your own free developer app, see below |
 | Deezer | full track via YouTube | public search endpoint for metadata. The song plays from the best matching YouTube upload (title, artist and duration are scored) |
 | Apple Music | full track via YouTube | public iTunes search endpoint, same matching as Deezer |
 
 Deezer and Apple Music do not give out full streams without a paid, DRM protected session, so only their official 30s clips are played from them directly. Those clips are listed under the **Prévia** chip at the right end of the source filter, never mixed into the normal results.
+
+**Spotify setup** (two minutes, free): create an app at <https://developer.spotify.com/dashboard>, then add its credentials to `~/Liner/config.json`. The app picks the change up on the next search, no restart needed. Saving your profile never touches this key.
+
+```json
+{
+  "spotify": { "clientId": "your client id", "clientSecret": "your client secret" }
+}
+```
 
 Each result row ends with a source badge. A `+N` chip means the same song exists on N other sources, click it to pick one. The chip row under the search tabs filters by source.
 

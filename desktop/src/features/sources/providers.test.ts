@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveExternalLink, resolveExternalPlayback, searchDeezer } from "./providers";
+import {
+  SpotifyNotConfiguredError,
+  isLinkLike,
+  resolveExternalLink,
+  resolveExternalPlayback,
+  searchDeezer,
+  searchSpotify,
+} from "./providers";
 
 const ytDto = (id: string, title: string, artists: string, seconds: number) => ({
   id,
@@ -15,6 +22,8 @@ const bridge = {
   youtubeResolve: vi.fn(),
   soundcloudStream: vi.fn(),
   soundcloudResolve: vi.fn(),
+  spotifySearch: vi.fn(),
+  spotifyResolve: vi.fn(),
 };
 
 beforeEach(() => {
@@ -125,5 +134,48 @@ describe("resolveExternalLink", () => {
 
   it("returns null for plain text", async () => {
     expect(await resolveExternalLink("daft punk")).toBeNull();
+  });
+});
+
+describe("spotify", () => {
+  const dto = (id: string, over = {}) => ({ id, title: "Song", artists: "Artist", coverUrl: "https://c", durationMs: 200000, explicit: false, ...over });
+
+  it("maps search results to sp: ids and passes the configured flag along", async () => {
+    bridge.spotifySearch.mockResolvedValue({ configured: true, tracks: [dto("4uLU6hMCjMI75M1A2tKUQC", { explicit: true })] });
+    const res = await searchSpotify("song");
+    expect(res.configured).toBe(true);
+    expect(res.tracks).toHaveLength(1);
+    expect(res.tracks[0]).toMatchObject({ id: "sp:4uLU6hMCjMI75M1A2tKUQC", source: "spotify", explicit: true });
+    expect(res.tracks[0]!.previewOnly).toBeUndefined();
+
+    bridge.spotifySearch.mockResolvedValue({ configured: false, tracks: [] });
+    expect(await searchSpotify("song")).toEqual({ configured: false, tracks: [] });
+  });
+
+  it("opens album and playlist links as a queue and complains when there are no credentials", async () => {
+    const url = "https://open.spotify.com/album/4uLU6hMCjMI75M1A2tKUQC";
+    bridge.spotifyResolve.mockResolvedValue({ configured: true, kind: "album", title: "An Album", tracks: [dto("a"), dto("b")] });
+    const res = await resolveExternalLink(url);
+    expect(res?.playlistTitle).toBe("An Album");
+    expect(res?.tracks.map((t) => t.id)).toEqual(["sp:a", "sp:b"]);
+    expect(new Set(res?.tracks.map((t) => t.collection)).size).toBe(1);
+
+    bridge.spotifyResolve.mockResolvedValue({ configured: false, kind: "none", tracks: [] });
+    await expect(resolveExternalLink(url)).rejects.toBeInstanceOf(SpotifyNotConfiguredError);
+  });
+
+  it("recognises spotify links and uris", () => {
+    expect(isLinkLike("https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC")).toBe(true);
+    expect(isLinkLike("spotify:playlist:4uLU6hMCjMI75M1A2tKUQC")).toBe(true);
+    expect(isLinkLike("spotify wrapped")).toBe(false);
+  });
+
+  it("plays a spotify row in full from the best youtube match and fails clearly without one", async () => {
+    bridge.youtubeSearch.mockResolvedValue([ytDto("RymhzC238YI", "MC Lan - Rabetão", "KondZilla", 191)]);
+    const session = await resolveExternalPlayback(track("sp:4uLU6hMCjMI75M1A2tKUQC"));
+    expect(session?.streamUrl).toBe("http://127.0.0.1:1/yt/RymhzC238YI");
+
+    bridge.youtubeSearch.mockResolvedValue([ytDto("zzzzzzzzzzz", "Totally Different", "Nobody", 400)]);
+    await expect(resolveExternalPlayback(track("sp:other00000000000000000"))).rejects.toThrow(/no full length match on YouTube/);
   });
 });

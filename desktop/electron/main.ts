@@ -38,6 +38,8 @@ import { createSleepBlocker } from "./sleep-blocker.js";
 import { getYoutubeStream, resolveYoutubeInput, searchYoutube } from "./youtube.js";
 import { withOpenCors } from "./cors.js";
 import { getSoundcloudStream, resolveSoundcloudUrl, searchSoundcloud } from "./soundcloud.js";
+import { createSpotify } from "./spotify.js";
+import { readAppConfig } from "./appConfig.js";
 import { LOCAL_DATA_KINDS, loadLocalData, resolveDataDir, saveLocalData, type LocalDataKind } from "./localData.js";
 
 // root error handling for main process
@@ -342,6 +344,14 @@ if (!gotTheLock) {
     );
     ipcMain.handle("soundcloud:resolve", (_event, url: string) => resolveSoundcloudUrl(String(url ?? "")));
     ipcMain.handle("soundcloud:stream", (_event, trackId: string) => getSoundcloudStream(String(trackId ?? "")));
+
+    // spotify only supplies metadata (the audio plays from the matching youtube upload). needs the user's own free
+    // developer app credentials in config.json, read on every call so editing the file takes effect without a restart
+    const spotify = createSpotify({ getCredentials: () => readAppConfig(localDataDir).spotify ?? {} });
+    ipcMain.handle("spotify:search", (_event, query: string, limit?: number) =>
+      spotify.search(String(query ?? ""), typeof limit === "number" ? limit : 20),
+    );
+    ipcMain.handle("spotify:resolve", (_event, url: string) => spotify.resolve(String(url ?? "")));
 
     ipcMain.handle("app:set-icon", async (_event, dataUrl: string) => {
       if (!mainWindow || !dataUrl) return;

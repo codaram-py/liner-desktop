@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { MainNetResult } from "./netdiag";
 import type { YoutubeResolveResult, YoutubeStreamDto, YoutubeTrackDto } from "./youtube";
 import type { SoundcloudResolveResult, SoundcloudStreamDto, SoundcloudTrackDto } from "./soundcloud";
+import type { SpotifyResolveResult, SpotifySearchResult } from "./spotify";
 
 export interface DeeplinkTarget {
   type: "artist" | "album" | "playlist" | "track";
@@ -130,6 +131,8 @@ export interface LinerElectronApi {
   soundcloudSearch: (query: string, limit?: number) => Promise<SoundcloudTrackDto[]>;
   soundcloudResolve: (url: string) => Promise<SoundcloudResolveResult>;
   soundcloudStream: (trackId: string) => Promise<SoundcloudStreamDto>;
+  spotifySearch: (query: string, limit?: number) => Promise<SpotifySearchResult>;
+  spotifyResolve: (url: string) => Promise<SpotifyResolveResult>;
 }
 
 const isHyprland = Boolean(
@@ -318,6 +321,8 @@ const api: LinerElectronApi = {
   soundcloudSearch: (query, limit) => ipcRenderer.invoke("soundcloud:search", query, limit),
   soundcloudResolve: (url) => ipcRenderer.invoke("soundcloud:resolve", url),
   soundcloudStream: (trackId) => ipcRenderer.invoke("soundcloud:stream", trackId),
+  spotifySearch: (query, limit) => ipcRenderer.invoke("spotify:search", query, limit),
+  spotifyResolve: (url) => ipcRenderer.invoke("spotify:resolve", url),
 };
 
 contextBridge.exposeInMainWorld("linerElectron", api);

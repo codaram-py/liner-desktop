@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  SpotifyNotConfiguredError,
   isLinkLike,
+  isSpotifyLike,
   resolveExternalLink,
   searchAppleMusic,
   searchDeezer,
   searchSoundcloud,
+  searchSpotify,
   searchYoutube,
   type ExternalTrack,
 } from "../providers";
@@ -22,6 +25,8 @@ export interface UseExternalSearchResult {
   // set when the query was a pasted youtube / soundcloud link, only that link's tracks are returned then
   linkMode: boolean;
   playlistTitle?: string;
+  // null until the first spotify answer, false when config.json has no client id / secret yet
+  spotifyConfigured: boolean | null;
 }
 
 type BySource = Partial<Record<SourceId, ExternalTrack[]>>;
@@ -33,6 +38,7 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
   const [hasLoaded, setHasLoaded] = useState(false);
   const [linkMode, setLinkMode] = useState(false);
   const [playlistTitle, setPlaylistTitle] = useState<string | undefined>();
+  const [spotifyConfigured, setSpotifyConfigured] = useState<boolean | null>(null);
   const requestIdRef = useRef(0);
 
   const trimmed = query.trim();
@@ -57,12 +63,23 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
     const timer = setTimeout(async () => {
       try {
         if (isLinkLike(trimmed)) {
-          const link = await resolveExternalLink(trimmed).catch(() => null);
+          const link = await resolveExternalLink(trimmed).catch((err) => {
+            if (err instanceof SpotifyNotConfiguredError) setSpotifyConfigured(false);
+            return null;
+          });
           if (!isCurrent()) return;
           if (link) {
             setBySource({ [link.tracks[0]!.source]: link.tracks });
             setLinkMode(true);
             setPlaylistTitle(link.playlistTitle);
+            setHasLoaded(true);
+            setLoading(false);
+            return;
+          }
+          // a spotify url that did not resolve is no use as a text query either
+          if (isSpotifyLike(trimmed)) {
+            setBySource({});
+            setLinkMode(false);
             setHasLoaded(true);
             setLoading(false);
             return;
@@ -76,6 +93,13 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
         const providers: [SourceId, Promise<ExternalTrack[]>][] = [
           ["youtube", searchYoutube(trimmed)],
           ["soundcloud", searchSoundcloud(trimmed)],
+          [
+            "spotify",
+            searchSpotify(trimmed).then((outcome) => {
+              if (isCurrent()) setSpotifyConfigured(outcome.configured);
+              return outcome.tracks;
+            }),
+          ],
           ["deezer", searchDeezer(trimmed, controller.signal)],
           ["apple_music", searchAppleMusic(trimmed, controller.signal)],
         ];
@@ -106,5 +130,5 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
 
   const tracks = useMemo(() => SOURCE_ORDER.flatMap((source) => bySource[source] ?? []), [bySource]);
 
-  return { tracks, loading, hasLoaded, linkMode, playlistTitle };
+  return { tracks, loading, hasLoaded, linkMode, playlistTitle, spotifyConfigured };
 }

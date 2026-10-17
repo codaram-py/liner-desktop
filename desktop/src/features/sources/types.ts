@@ -14,21 +14,23 @@ export const SOURCES: Record<SourceId, SourceInfo> = {
   liner: { id: "liner", label: "Liner", color: "#8b93ff", priority: 0 },
   youtube: { id: "youtube", label: "YouTube", color: "#ff2d46", priority: 1 },
   soundcloud: { id: "soundcloud", label: "SoundCloud", color: "#ff7a1a", priority: 2 },
-  deezer: { id: "deezer", label: "Deezer", color: "#a238ff", priority: 3 },
-  apple_music: { id: "apple_music", label: "Apple Music", color: "#fa5c7c", priority: 4 },
+  spotify: { id: "spotify", label: "Spotify", color: "#1ed760", priority: 3 },
+  deezer: { id: "deezer", label: "Deezer", color: "#a238ff", priority: 4 },
+  apple_music: { id: "apple_music", label: "Apple Music", color: "#fa5c7c", priority: 5 },
 };
 
-export const SOURCE_ORDER: SourceId[] = ["liner", "youtube", "soundcloud", "deezer", "apple_music"];
+export const SOURCE_ORDER: SourceId[] = ["liner", "youtube", "soundcloud", "spotify", "deezer", "apple_music"];
 
 // sources that only hand us metadata: the full track is played from the matching youtube upload
 export function playsViaYoutube(source: SourceId): boolean {
-  return source === "deezer" || source === "apple_music";
+  return source === "spotify" || source === "deezer" || source === "apple_music";
 }
 
 // id prefixes for tracks that do not come from the liner catalog, playback is resolved locally
 const ID_PREFIX: Record<Exclude<SourceId, "liner">, string> = {
   youtube: "yt:",
   soundcloud: "sc:",
+  spotify: "sp:",
   deezer: "dz:",
   apple_music: "am:",
 };

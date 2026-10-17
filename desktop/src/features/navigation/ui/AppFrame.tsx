@@ -1024,6 +1024,17 @@ export default function AppFrame({ children }: AppFrameProps) {
                       previewCount={externalSearch.tracks.filter((track) => track.previewOnly).length}
                     />
                   ) : null}
+                  {externalSearchEnabled &&
+                  externalSearch.spotifyConfigured === false &&
+                  (sourceFilter === "spotify" || /spotify/i.test(searchQuery)) ? (
+                    <div
+                      className="px-[16px] pb-[6px] text-[12px] text-text-tertiary shrink-0 leading-snug"
+                      style={{ fontFamily: "var(--font-inter), sans-serif" }}
+                    >
+                      Spotify precisa do seu Client ID e Client Secret (grátis em developer.spotify.com/dashboard).
+                      Coloque em ~/Liner/config.json: {`"spotify": { "clientId": "...", "clientSecret": "..." }`}
+                    </div>
+                  ) : null}
                   {externalSearchEnabled && externalSearch.linkMode ? (
                     <div
                       className="px-[16px] pb-[6px] text-[12px] text-text-tertiary shrink-0"

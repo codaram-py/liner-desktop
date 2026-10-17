@@ -130,13 +130,65 @@ export async function resolveSoundcloudLink(input: string): Promise<LinkResult |
   };
 }
 
+// ---- spotify (runs in the electron main process, see electron/spotify.ts) ----
+// metadata only: the audio plays from the matching youtube upload, like deezer / apple music rows
+
+export function isSpotifyLike(query: string): boolean {
+  const q = query.trim();
+  return /(?:^|\/\/|\.)open\.spotify\.com\//i.test(q) || /^spotify:(?:track|album|playlist):/i.test(q);
+}
+
+function fromSpotifyDto(dto: {
+  id: string;
+  title: string;
+  artists: string;
+  coverUrl: string;
+  durationMs: number;
+  explicit: boolean;
+}): ExternalTrack {
+  return toExternal("spotify", dto.id, dto, dto.explicit ? { explicit: true } : undefined);
+}
+
+export interface SpotifySearchOutcome {
+  // false when there are no client credentials in config.json yet
+  configured: boolean;
+  tracks: ExternalTrack[];
+}
+
+export async function searchSpotify(query: string): Promise<SpotifySearchOutcome> {
+  const bridge = window.linerElectron;
+  if (!bridge?.spotifySearch) return { configured: true, tracks: [] };
+  const res = await bridge.spotifySearch(query, SEARCH_LIMIT);
+  return { configured: res.configured, tracks: res.tracks.map(fromSpotifyDto) };
+}
+
+export class SpotifyNotConfiguredError extends Error {
+  constructor() {
+    super("Spotify needs a client id and secret in config.json");
+    this.name = "SpotifyNotConfiguredError";
+  }
+}
+
+export async function resolveSpotifyLink(input: string): Promise<LinkResult | null> {
+  const bridge = window.linerElectron;
+  if (!bridge?.spotifyResolve || !isSpotifyLike(input)) return null;
+  const res = await bridge.spotifyResolve(input);
+  if (!res.configured) throw new SpotifyNotConfiguredError();
+  if (res.kind === "none" || res.tracks.length === 0) return null;
+  const collection = res.kind === "album" || res.kind === "playlist" ? `sp-${res.kind}:${input.trim()}` : undefined;
+  return {
+    tracks: res.tracks.map((dto) => ({ ...fromSpotifyDto(dto), collection })),
+    playlistTitle: res.kind === "album" || res.kind === "playlist" ? res.title : undefined,
+  };
+}
+
 // any pasted link we know how to open
 export async function resolveExternalLink(input: string): Promise<LinkResult | null> {
-  return (await resolveYoutubeLink(input)) ?? (await resolveSoundcloudLink(input));
+  return (await resolveYoutubeLink(input)) ?? (await resolveSoundcloudLink(input)) ?? (await resolveSpotifyLink(input));
 }
 
 export function isLinkLike(query: string): boolean {
-  return isYoutubeLike(query) || isSoundcloudLike(query);
+  return isYoutubeLike(query) || isSoundcloudLike(query) || isSpotifyLike(query);
 }
 
 // ---- deezer / apple music: public catalog endpoints, metadata + 30s clips ----
@@ -282,6 +334,9 @@ export async function resolveExternalPlayback(
 
   const videoId = await findYoutubeVideoFor(track);
   if (videoId) return youtubeSession(videoId);
+
+  // spotify has no clip to fall back on
+  if (source === "spotify") throw new Error(`no full length match on YouTube for "${track.artists} - ${track.title}"`);
 
   // nothing on youtube matches closely enough, a clip is better than silence
   console.warn(`no full length match for "${track.artists} - ${track.title}", playing the 30s preview`);

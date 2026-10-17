@@ -19,6 +19,8 @@ export interface LocalProfile {
 export interface LocalConfig {
   version: 1;
   profile: LocalProfile;
+  // settings only the main process reads (spotify credentials...), saved back untouched
+  [extra: string]: unknown;
 }
 
 export interface LocalPlaylistItem {
@@ -86,12 +88,14 @@ export function defaultLibrary(): LocalLibrary {
 // files are hand editable, so anything missing or mistyped falls back to the default instead of crashing the app
 export function normalizeConfig(raw: unknown): LocalConfig {
   const base = defaultConfig();
+  const { version: _version, profile: _profile, ...extras } = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const profile = (raw as Partial<LocalConfig> | null)?.profile;
-  if (!profile || typeof profile !== "object") return base;
+  if (!profile || typeof profile !== "object") return { ...extras, ...base };
   const p = profile as Partial<LocalProfile>;
   const str = (v: unknown, fallback: string | null) => (typeof v === "string" ? v : fallback);
   const bool = (v: unknown, fallback: boolean) => (typeof v === "boolean" ? v : fallback);
   return {
+    ...extras,
     version: 1,
     profile: {
       id: LOCAL_USER_ID,

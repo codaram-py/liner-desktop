@@ -1,0 +1,153 @@
+// @vitest-environment node
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSpotify, parseSpotifyUrl } from "./spotify";
+
+const ID = "4uLU6hMCjMI75M1A2tKUQC";
+const ID2 = "6rqhFgbbKwnb9MLmUQDhG6";
+const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+
+const spTrack = (over: Record<string, unknown> = {}) => ({
+  id: ID,
+  name: "Never Gonna Give You Up",
+  duration_ms: 213000,
+  explicit: false,
+  artists: [{ name: "Rick Astley" }, { name: "Guest" }],
+  album: { images: [{ url: "https://i/640" }, { url: "https://i/300" }, { url: "https://i/64" }] },
+  ...over,
+});
+
+let calls: { url: string; init?: RequestInit }[];
+let respond: (url: URL, init?: RequestInit) => Response;
+let creds: { clientId?: string; clientSecret?: string };
+let clock: number;
+
+const make = () =>
+  createSpotify({
+    getCredentials: () => creds,
+    now: () => clock,
+    fetchImpl: (async (input: any, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const url = new URL(String(input));
+      if (url.host === "accounts.spotify.com") return json({ access_token: `tok${calls.filter((c) => c.url.includes("accounts")).length}`, expires_in: 3600 });
+      return respond(url, init);
+    }) as typeof fetch,
+  });
+
+beforeEach(() => {
+  calls = [];
+  clock = 1_000_000;
+  creds = { clientId: "cid", clientSecret: "sec" };
+  respond = () => json({}, 404);
+});
+
+describe("parseSpotifyUrl", () => {
+  it("reads open.spotify.com links, localized links and uris", () => {
+    expect(parseSpotifyUrl(`https://open.spotify.com/track/${ID}?si=abc`)).toEqual({ kind: "track", id: ID });
+    expect(parseSpotifyUrl(`https://open.spotify.com/intl-pt/album/${ID}`)).toEqual({ kind: "album", id: ID });
+    expect(parseSpotifyUrl(`open.spotify.com/playlist/${ID}`)).toEqual({ kind: "playlist", id: ID });
+    expect(parseSpotifyUrl(`spotify:track:${ID}`)).toEqual({ kind: "track", id: ID });
+  });
+
+  it("ignores everything else", () => {
+    expect(parseSpotifyUrl("https://open.spotify.com/artist/" + ID)).toBeNull();
+    expect(parseSpotifyUrl("https://youtube.com/watch?v=abc")).toBeNull();
+    expect(parseSpotifyUrl("daft punk")).toBeNull();
+    expect(parseSpotifyUrl(`https://open.spotify.com/track/short`)).toBeNull();
+  });
+});
+
+describe("search", () => {
+  it("reports not configured without any request when credentials are missing", async () => {
+    creds = {};
+    expect(await make().search("daft punk")).toEqual({ configured: false, tracks: [] });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("gets a client credentials token once and maps tracks", async () => {
+    respond = (url, init) => {
+      expect(url.pathname).toBe("/v1/search");
+      expect(url.searchParams.get("q")).toBe("never gonna");
+      expect((init!.headers as Record<string, string>).authorization).toMatch(/^Bearer tok\d$/);
+      return json({ tracks: { items: [spTrack(), spTrack({ id: "x", name: "Zero length", duration_ms: 0 })] } });
+    };
+    const sp = make();
+    const first = await sp.search("never gonna");
+    expect(first).toEqual({
+      configured: true,
+      tracks: [{ id: ID, title: "Never Gonna Give You Up", artists: "Rick Astley, Guest", coverUrl: "https://i/300", durationMs: 213000, explicit: false }],
+    });
+
+    await sp.search("never gonna");
+    expect(calls.filter((c) => c.url.includes("accounts.spotify.com"))).toHaveLength(1);
+
+    const tokenCall = calls[0]!;
+    expect((tokenCall.init!.headers as Record<string, string>).authorization).toBe(`Basic ${Buffer.from("cid:sec").toString("base64")}`);
+
+    clock += 3_600_000; // token expired
+    await sp.search("never gonna");
+    expect(calls.filter((c) => c.url.includes("accounts.spotify.com"))).toHaveLength(2);
+  });
+
+  it("explains rejected credentials and rate limits", async () => {
+    const bad = createSpotify({ getCredentials: () => creds, fetchImpl: (async () => new Response("{}", { status: 400 })) as typeof fetch });
+    await expect(bad.search("x")).rejects.toThrow(/rejected the client id/);
+
+    respond = () => json({}, 429, { "retry-after": "7" });
+    await expect(make().search("x")).rejects.toThrow(/retry in 7s/);
+  });
+});
+
+describe("resolve", () => {
+  it("resolves a track link", async () => {
+    respond = (url) => (url.pathname === `/v1/tracks/${ID}` ? json(spTrack()) : json({}, 404));
+    const res = await make().resolve(`https://open.spotify.com/track/${ID}`);
+    expect(res).toMatchObject({ kind: "track", configured: true });
+    expect(res.tracks[0]).toMatchObject({ id: ID, title: "Never Gonna Give You Up" });
+  });
+
+  it("resolves albums using the album cover for every track", async () => {
+    respond = (url) =>
+      url.pathname === `/v1/albums/${ID}`
+        ? json({ name: "Whenever You Need Somebody", images: [{ url: "https://a/640" }, { url: "https://a/300" }], tracks: { items: [spTrack({ album: undefined }), spTrack({ id: "t2", name: "Two", album: undefined })] } })
+        : json({}, 404);
+    const res = await make().resolve(`https://open.spotify.com/album/${ID}`);
+    expect(res).toMatchObject({ kind: "album", title: "Whenever You Need Somebody" });
+    expect(res.tracks.map((t) => [t.title, t.coverUrl])).toEqual([["Never Gonna Give You Up", "https://a/300"], ["Two", "https://a/300"]]);
+  });
+
+  it("resolves playlists and skips local files and episodes", async () => {
+    respond = (url) => {
+      if (url.pathname === `/v1/playlists/${ID}`) return json({ name: "My list" });
+      if (url.pathname === `/v1/playlists/${ID}/tracks`) {
+        return json({ items: [{ track: spTrack() }, { track: spTrack({ id: "l", is_local: true }) }, { track: spTrack({ id: "e", type: "episode" }) }, { track: null }] });
+      }
+      return json({}, 404);
+    };
+    const res = await make().resolve(`https://open.spotify.com/playlist/${ID}`);
+    expect(res).toMatchObject({ kind: "playlist", title: "My list" });
+    expect(res.tracks).toHaveLength(1);
+  });
+
+  it("reports unconfigured, unknown links and missing items", async () => {
+    creds = {};
+    expect(await make().resolve(`https://open.spotify.com/track/${ID}`)).toEqual({ configured: false, kind: "none", tracks: [] });
+    creds = { clientId: "cid", clientSecret: "sec" };
+    expect(await make().resolve("daft punk")).toEqual({ configured: true, kind: "none", tracks: [] });
+    await expect(make().resolve(`https://open.spotify.com/playlist/${ID2}`)).rejects.toThrow(/could not find/);
+  });
+
+  it("retries once with a fresh token after a 401", async () => {
+    let first = true;
+    respond = () => {
+      if (first) {
+        first = false;
+        return json({}, 401);
+      }
+      return json(spTrack());
+    };
+    const res = await make().resolve(`https://open.spotify.com/track/${ID}`);
+    expect(res.tracks).toHaveLength(1);
+    expect(calls.filter((c) => c.url.includes("accounts.spotify.com"))).toHaveLength(2);
+  });
+});
