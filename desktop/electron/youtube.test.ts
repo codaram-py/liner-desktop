@@ -14,7 +14,7 @@ const state = {
 };
 
 const fakeYt = {
-  session: { player: {}, on: vi.fn() },
+  session: { player: { player_id: "testplayer", signature_timestamp: 20000 }, on: vi.fn() },
   search: vi.fn(async () => ({
     results: [
       {
@@ -49,7 +49,7 @@ const fakeYt = {
 };
 
 const fakeAuthYt = {
-  session: { player: {}, on: vi.fn(), signIn: vi.fn(async () => {}) },
+  session: { player: { player_id: "testplayer", signature_timestamp: 20000 }, on: vi.fn(), signIn: vi.fn(async () => {}) },
   getBasicInfo: vi.fn(async (_id: string, opts: { client: string }) => {
     state.clients.push(`auth:${opts.client}`);
     const info = state.infoByClient[`auth:${opts.client}`];

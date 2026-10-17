@@ -3,6 +3,7 @@ import { createSecureFileCache } from "./secureFileCache.js";
 import type { SecretBox } from "./spotifyAuth.js";
 import { createYoutubeLogin, type LoginSession, type YoutubeLoginStatus } from "./youtubeLogin.js";
 import { parseYoutubeInput } from "./youtubeInput.js";
+import { ensureSignatureTimestamp } from "./youtubePlayer.js";
 import { downloadWhole, MAX_BUFFER_BYTES } from "./youtubeDownload.js";
 import { makeCpn, startYoutubeProxy, withRange, type Upstream, type YoutubeProxy } from "./youtubeProxy.js";
 
@@ -70,7 +71,11 @@ function getClient(): Promise<Innertube> {
   if (!anonPromise) {
     // youtubei.js logs a parser warning for every unknown node, that is noise here
     Log.setLevel(Log.Level.ERROR);
-    anonPromise = Innertube.create({ generate_session_locally: true }).catch((err) => {
+    anonPromise = (async () => {
+      const yt = await Innertube.create({ generate_session_locally: true });
+      log(`anonymous session: ${await ensureSignatureTimestamp(yt.session.player as any)}`);
+      return yt;
+    })().catch((err) => {
       anonPromise = null;
       throw err;
     });
@@ -85,6 +90,7 @@ function getAuthClient(): Promise<Innertube> {
     authPromise = (async () => {
       const yt = await Innertube.create({ cache: secretCache as any });
       yt.session.on("update-credentials", () => void yt.session.oauth.cacheCredentials().catch(() => {}));
+      log(`signed in session: ${await ensureSignatureTimestamp(yt.session.player as any)}`);
       return yt;
     })().catch((err) => {
       authPromise = null;
@@ -317,10 +323,16 @@ async function resolveUpstream(videoId: string): Promise<ResolvedUpstream> {
 
     for (const { yt, client, tag } of candidates) {
       try {
-        const resolved = await Promise.race([
-          resolveClient(yt, videoId, client),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${CLIENT_TIMEOUT_MS / 1000}s`)), CLIENT_TIMEOUT_MS)),
-        ]);
+        const attempt = () =>
+          Promise.race([
+            resolveClient(yt, videoId, client),
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${CLIENT_TIMEOUT_MS / 1000}s`)), CLIENT_TIMEOUT_MS)),
+          ]);
+        // "The page needs to be reloaded" is youtube asking for the same request again
+        const resolved = await attempt().catch((err: unknown) => {
+          if (!/needs to be reloaded/i.test(err instanceof Error ? err.message : String(err))) throw err;
+          return attempt();
+        });
         log(`${videoId} ok via ${tag} (${resolved.mimeType}, ${resolved.contentLength} bytes)`);
         upstreams.set(videoId, resolved);
         while (upstreams.size > MAX_CACHED) upstreams.delete(upstreams.keys().next().value!);
