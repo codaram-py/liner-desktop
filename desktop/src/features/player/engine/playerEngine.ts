@@ -938,7 +938,9 @@ class PlayerEngine {
     // for tracks from the local providers the real reason is what the user needs to read (or paste back)
     const reason = isExternalTrackId(track.id) ? describeStreamError(info.message) : "";
     showToast(translate("player.track_unavailable_title"), "error", {
-      description: reason ? `${label} · ${reason}` : label,
+      description: label,
+      // the reason stays on screen long enough to read (and screenshot)
+      ...(reason ? { detail: reason, duration: 15000 } : {}),
     });
     void this.skipNext(false);
   }

@@ -35,6 +35,8 @@ export interface ToastOptions {
   id?: string | number;
   duration?: number;
   description?: string;
+  // longer text shown wrapped under the title row (error reasons), where description is a single scrolling line
+  detail?: string;
   requestId?: string;
   errorCode?: string;
   action?: ToastAction;
@@ -50,6 +52,8 @@ interface Toast {
   variant: ToastVariant;
   duration: number;
   description?: string;
+  // longer text shown wrapped under the title row (error reasons), where description is a single scrolling line
+  detail?: string;
   requestId?: string;
   errorCode?: string;
   action?: ToastAction;
@@ -529,6 +533,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           variant,
           duration,
           description: options?.description,
+          detail: options?.detail,
           requestId: options?.requestId,
           errorCode: options?.errorCode,
           action: options?.action ?? options?.button,
@@ -542,6 +547,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           if (
             prev.message === item.message &&
             prev.description === item.description &&
+            prev.detail === item.detail &&
             prev.variant === item.variant &&
             prev.duration === item.duration &&
             prev.errorCode === item.errorCode &&
@@ -873,6 +879,14 @@ function NotificationCard({
             </>
           )}
         </div>
+        {item.detail && (
+          <div
+            className="mt-[3px] select-text break-words text-[11.5px] leading-snug text-text-tertiary"
+            style={{ display: "-webkit-box", WebkitLineClamp: 5, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+          >
+            {item.detail}
+          </div>
+        )}
         {item.requestId && (
           <div className="mt-[4px] flex items-center gap-[6px]">
             <button
