@@ -14,7 +14,7 @@ const state = {
 };
 
 const fakeYt = {
-  session: { player: {} },
+  session: { player: {}, on: vi.fn() },
   search: vi.fn(async () => ({
     results: [
       {
@@ -49,6 +49,7 @@ const fakeYt = {
 
 vi.mock("youtubei.js", () => ({
   Innertube: { create: vi.fn(async () => fakeYt) },
+  Log: { setLevel: vi.fn(), Level: { ERROR: 1 } },
   Constants: {
     CLIENTS: { IOS: { USER_AGENT: "ios-ua" }, ANDROID_VR: { USER_AGENT: "vr-ua" }, TV_SIMPLY: { USER_AGENT: "tvs-ua" }, WEB: {} },
     STREAM_HEADERS: { origin: "https://www.youtube.com" },
@@ -141,14 +142,35 @@ describe("getYoutubeStream", () => {
     });
     expect(stream.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/yt\/fallbackvid\?k=/);
 
-    // what the <audio> element does: a ranged GET against the proxy url
+    // the whole file was fetched with the tv_simply identity while resolving
+    const last = googlevideo.mock.calls.at(-1)!;
+    expect(last[0]).toContain("c=TVS");
+    expect(last[0]).toContain("range=0-399");
+    expect((last[1]!.headers as Record<string, string>)["user-agent"]).toBe("tvs-ua");
+
+    // what the <audio> element does: a ranged GET against the proxy url, answered from memory (no new googlevideo call)
+    const before = googlevideo.mock.calls.length;
     const res = await realFetch(stream.url, { headers: { range: "bytes=10-59" } });
     expect(res.status).toBe(206);
     expect(Buffer.from(await res.arrayBuffer()).equals(BYTES.subarray(10, 60))).toBe(true);
-    const last = googlevideo.mock.calls.at(-1)!;
-    expect(last[0]).toContain("c=TVS");
-    expect(last[0]).toContain("range=10-59");
-    expect((last[1]!.headers as Record<string, string>)["user-agent"]).toBe("tvs-ua");
+    expect(googlevideo.mock.calls.length).toBe(before);
+  });
+
+  it("moves to the next client when a url passes the probe but 403s on the real download", async () => {
+    state.infoByClient.ANDROID_VR = {
+      playability_status: { status: "OK" },
+      chooseFormat: vi.fn(() => fakeFormat('audio/mp4; codecs="mp4a.40.2"', "https://rr1.googlevideo.com/videoplayback?c=VR")),
+    };
+    state.infoByClient.TV_SIMPLY = {
+      playability_status: { status: "OK" },
+      chooseFormat: vi.fn(() => fakeFormat('audio/mp4; codecs="mp4a.40.2"', "https://rr1.googlevideo.com/videoplayback?c=TVS")),
+    };
+    googlevideo.mockImplementation(async (url) => {
+      const [a, b] = new URL(url).searchParams.get("range")!.split("-").map(Number);
+      return url.includes("c=VR") && b! - a! > 1 ? new Response("forbidden", { status: 403 }) : slice(url);
+    });
+    await getYoutubeStream("probeokvid1");
+    expect(state.clients).toEqual(["ANDROID_VR", "TV_SIMPLY"]);
   });
 
   it("prefers mp4 but accepts webm/opus when mp4 is missing, and reuses the resolved stream", async () => {

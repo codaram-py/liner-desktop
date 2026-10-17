@@ -7,4 +7,5 @@ export { default as SourceBadges } from "./ui/SourceBadges";
 export { default as SourceFilterBar } from "./ui/SourceFilterBar";
 export { default as SpotifySetup } from "./ui/SpotifySetup";
 export { default as SpotifyAccountBar } from "./ui/SpotifyAccountBar";
+export { default as YoutubeAccountBar } from "./ui/YoutubeAccountBar";
 export { SPOTIFY_LIKED_QUERY } from "./providers";

@@ -89,6 +89,25 @@ describe("search", () => {
     expect(calls.filter((c) => c.url.includes("accounts.spotify.com"))).toHaveLength(2);
   });
 
+  it("never asks for more than 10 per page (dev mode apps reject larger limits)", async () => {
+    const seen: string[] = [];
+    respond = (url) => {
+      const offset = Number(url.searchParams.get("offset"));
+      seen.push(`${url.searchParams.get("limit")}@${offset}`);
+      expect(Number(url.searchParams.get("limit"))).toBeLessThanOrEqual(10);
+      return json({ tracks: { items: [spTrack({ id: `id${offset}` })], next: offset < 20 ? "more" : null } });
+    };
+    const res = await make().search("pages");
+    expect(seen.slice(0, 2)).toEqual(["10@0", "10@10"]);
+    expect(res.tracks.length).toBe(seen.length);
+  });
+
+  it("surfaces the error body of a failed api call", async () => {
+    respond = (url) =>
+      url.pathname === "/v1/search" ? json({ error: { status: 400, message: "Invalid limit" } }, 400) : json({}, 404);
+    await expect(make().search("x")).rejects.toThrow(/Invalid limit/);
+  });
+
   it("explains rejected credentials and rate limits", async () => {
     const bad = createSpotify({ getCredentials: () => creds, fetchImpl: (async () => new Response("{}", { status: 400 })) as typeof fetch });
     await expect(bad.search("x")).rejects.toThrow(/rejected the client id/);

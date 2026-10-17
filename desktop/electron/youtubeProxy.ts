@@ -13,6 +13,8 @@ export interface Upstream {
   mimeType: string;
   userAgent: string;
   headers: Record<string, string>;
+  // whole file when it was downloaded ahead of time, served straight from memory
+  buffer?: Buffer;
 }
 
 export interface ProxyDeps {
@@ -33,7 +35,7 @@ export const DEFAULT_CHUNK_BYTES = 1024 * 1024;
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
 const CPN_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-function makeCpn(): string {
+export function makeCpn(): string {
   const bytes = randomBytes(16);
   let out = "";
   for (const b of bytes) out += CPN_ALPHABET[b % CPN_ALPHABET.length];
@@ -128,6 +130,11 @@ export async function startYoutubeProxy(deps: ProxyDeps): Promise<YoutubeProxy> 
       if (req.method === "HEAD") {
         res.writeHead(range ? 206 : 200, headers);
         return res.end();
+      }
+
+      if (up.buffer && up.buffer.length === total) {
+        res.writeHead(range ? 206 : 200, headers);
+        return res.end(up.buffer.subarray(start, end + 1));
       }
 
       const cpn = makeCpn();

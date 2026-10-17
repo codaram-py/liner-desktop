@@ -35,7 +35,7 @@ import { TouchBarManager } from "./touchbar.js";
 import { OverlayManager } from "./overlay.js";
 import { BundleManager } from "./bundle-manager.js";
 import { createSleepBlocker } from "./sleep-blocker.js";
-import { getYoutubeStream, resolveYoutubeInput, searchYoutube } from "./youtube.js";
+import { configureYoutube, getYoutubeLoginStatus, getYoutubeStream, resolveYoutubeInput, searchYoutube, youtubeLogin } from "./youtube.js";
 import { withOpenCors } from "./cors.js";
 import { getSoundcloudStream, resolveSoundcloudUrl, searchSoundcloud } from "./soundcloud.js";
 import { createSpotify } from "./spotify.js";
@@ -337,6 +337,17 @@ if (!gotTheLock) {
       searchYoutube(String(query ?? ""), typeof limit === "number" ? limit : 20),
     );
     ipcMain.handle("youtube:resolve", (_event, input: string) => resolveYoutubeInput(String(input ?? "")));
+    configureYoutube({
+      dataDir: localDataDir,
+      box: {
+        isAvailable: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (plain) => safeStorage.encryptString(plain),
+        decrypt: (data) => safeStorage.decryptString(data),
+      },
+    });
+    ipcMain.handle("youtube:auth-status", () => getYoutubeLoginStatus());
+    ipcMain.handle("youtube:login-start", () => youtubeLogin.start());
+    ipcMain.handle("youtube:logout", () => youtubeLogin.logout());
     ipcMain.handle("youtube:stream", (_event, videoId: string) => getYoutubeStream(String(videoId ?? "")));
 
     // soundcloud provider, same shape as the youtube one

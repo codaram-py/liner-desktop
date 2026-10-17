@@ -45,6 +45,7 @@ import {
   SPOTIFY_LIKED_QUERY,
   SpotifyAccountBar,
   SpotifySetup,
+  YoutubeAccountBar,
   buildSearchResults,
   useExternalSearch,
   type SourceFilter,
@@ -1032,6 +1033,7 @@ export default function AppFrame({ children }: AppFrameProps) {
                   (sourceFilter === "spotify" || /spotify/i.test(searchQuery)) ? (
                     <SpotifySetup onSaved={externalSearch.retry} />
                   ) : null}
+                  {externalSearchEnabled && sourceFilter === "youtube" ? <YoutubeAccountBar onChanged={externalSearch.retry} /> : null}
                   {externalSearchEnabled && externalSearch.spotifyConfigured === true && sourceFilter === "spotify" ? (
                     <SpotifyAccountBar
                       onOpenLiked={() => setSearchQuery(SPOTIFY_LIKED_QUERY)}

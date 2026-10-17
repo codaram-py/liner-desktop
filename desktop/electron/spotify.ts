@@ -40,6 +40,7 @@ export interface SpotifyDeps {
 const API = "https://api.spotify.com/v1";
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
 const LIST_LIMIT = 100;
+const SEARCH_PAGE = 10;
 
 export type SpotifyKind = "track" | "album" | "playlist" | "liked";
 
@@ -160,7 +161,11 @@ export function createSpotify(deps: SpotifyDeps) {
     if (res.status === 403 && loggedIn()) throw new Error("Spotify refused this request, log in again to renew the permissions");
     if (res.status === 429) throw new Error(`Spotify is rate limiting this app, retry in ${res.headers.get("retry-after") ?? "a few"}s`);
     if (res.status === 404) throw new Error("Spotify could not find that item (private playlists need you to be logged in)");
-    if (!res.ok) throw new Error(`Spotify ${pathAndQuery.split("?")[0]} responded ${res.status}`);
+    if (!res.ok) {
+      // spotify explains 400s in the body ("Invalid limit"...), worth showing
+      const detail = ((await res.json().catch(() => null)) as { error?: { message?: string } } | null)?.error?.message;
+      throw new Error(`Spotify ${pathAndQuery.split("?")[0]} responded ${res.status}${detail ? `: ${detail}` : ""}`);
+    }
     return (await res.json()) as T;
   }
 
@@ -185,8 +190,17 @@ export function createSpotify(deps: SpotifyDeps) {
     if (!configured()) return { configured: false, tracks: [] };
     const q = query.trim();
     if (!q) return { configured: true, tracks: [] };
-    const res = await api<{ tracks?: { items?: any[] } }>(`/search?type=track&limit=${Math.min(limit, 50)}&q=${encodeURIComponent(q)}`);
-    return { configured: true, tracks: clean((res.tracks?.items ?? []).map((t) => toTrack(t))) };
+    // apps in development mode are capped at 10 results per search request (a larger limit is answered with a 400),
+    // so more results come from more pages
+    const items: any[] = [];
+    for (let offset = 0; offset < limit; offset += SEARCH_PAGE) {
+      const res = await api<{ tracks?: { items?: any[]; next?: string | null } }>(
+        `/search?type=track&limit=${Math.min(SEARCH_PAGE, limit - offset)}&offset=${offset}&q=${encodeURIComponent(q)}`,
+      );
+      items.push(...(res.tracks?.items ?? []));
+      if (!res.tracks?.next) break;
+    }
+    return { configured: true, tracks: clean(items.map((t) => toTrack(t))) };
   }
 
   // liked songs come 50 at a time, four pages is plenty for a queue

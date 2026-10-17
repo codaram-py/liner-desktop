@@ -4,6 +4,7 @@ import type { YoutubeResolveResult, YoutubeStreamDto, YoutubeTrackDto } from "./
 import type { SoundcloudResolveResult, SoundcloudStreamDto, SoundcloudTrackDto } from "./soundcloud";
 import type { SpotifyResolveResult, SpotifySearchResult } from "./spotify";
 import type { SpotifyAuthStatus } from "./spotifyAuth";
+import type { YoutubeLoginStatus } from "./youtubeLogin";
 
 export interface DeeplinkTarget {
   type: "artist" | "album" | "playlist" | "track";
@@ -137,6 +138,9 @@ export interface LinerElectronApi {
   spotifyStatus: () => Promise<SpotifyAuthStatus & { hasClientId: boolean }>;
   spotifyLogin: () => Promise<SpotifyAuthStatus>;
   spotifyLogout: () => Promise<void>;
+  youtubeAuthStatus: () => Promise<YoutubeLoginStatus>;
+  youtubeLoginStart: () => Promise<YoutubeLoginStatus>;
+  youtubeLogout: () => Promise<void>;
 }
 
 const isHyprland = Boolean(
@@ -330,6 +334,9 @@ const api: LinerElectronApi = {
   spotifyStatus: () => ipcRenderer.invoke("spotify:status"),
   spotifyLogin: () => ipcRenderer.invoke("spotify:login"),
   spotifyLogout: () => ipcRenderer.invoke("spotify:logout"),
+  youtubeAuthStatus: () => ipcRenderer.invoke("youtube:auth-status"),
+  youtubeLoginStart: () => ipcRenderer.invoke("youtube:login-start"),
+  youtubeLogout: () => ipcRenderer.invoke("youtube:logout"),
 };
 
 contextBridge.exposeInMainWorld("linerElectron", api);

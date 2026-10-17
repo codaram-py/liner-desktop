@@ -1,6 +1,10 @@
-import { Constants, Innertube } from "youtubei.js";
+import { Constants, Innertube, Log } from "youtubei.js";
+import { createSecureFileCache } from "./secureFileCache.js";
+import type { SecretBox } from "./spotifyAuth.js";
+import { createYoutubeLogin, type LoginSession, type YoutubeLoginStatus } from "./youtubeLogin.js";
 import { parseYoutubeInput } from "./youtubeInput.js";
-import { startYoutubeProxy, withRange, type Upstream, type YoutubeProxy } from "./youtubeProxy.js";
+import { downloadWhole, MAX_BUFFER_BYTES } from "./youtubeDownload.js";
+import { makeCpn, startYoutubeProxy, withRange, type Upstream, type YoutubeProxy } from "./youtubeProxy.js";
 
 export interface YoutubeTrackDto {
   id: string;
@@ -26,9 +30,10 @@ export interface YoutubeStreamDto {
 // order matters: clients that usually hand out plain googlevideo urls first, the ones that need a po token last.
 // every candidate is probed with a real ranged request, a client whose urls answer 403 is skipped instead of reaching the player
 const STREAM_CLIENTS = ["ANDROID_VR", "TV_SIMPLY", "TV_EMBEDDED", "WEB_EMBEDDED", "TV", "ANDROID", "IOS", "WEB"] as const;
-const CLIENT_TIMEOUT_MS = 12_000;
+const CLIENT_TIMEOUT_MS = 45_000;
 const UPSTREAM_TTL_MS = 10 * 60 * 1000;
 const PLAYLIST_LIMIT = 100;
+const MAX_CACHED = 4; // each entry can hold up to 60 MB
 
 type StreamClient = (typeof STREAM_CLIENTS)[number];
 
@@ -42,17 +47,59 @@ interface ResolvedUpstream extends Upstream {
 
 const log = (message: string) => console.log(`\x1b[44;37m youtube \x1b[0m ${message}`);
 
+// a signed in session (tv device flow) is what gets past "sign in to confirm you're not a bot", so the tv client leads then
+const SIGNED_IN_CLIENTS: readonly StreamClient[] = ["TV", "ANDROID_VR", "TV_SIMPLY", "WEB_EMBEDDED", "TV_EMBEDDED", "ANDROID", "IOS", "WEB"];
+
 let clientPromise: Promise<Innertube> | null = null;
+let secretCache: ReturnType<typeof createSecureFileCache> | undefined;
+let signedIn = false;
+
+// call once at startup: google login (if any) is kept in <dataDir>/youtube-session.json, encrypted with the os keychain
+export function configureYoutube(opts: { dataDir: string; box: SecretBox }): void {
+  secretCache = createSecureFileCache(`${opts.dataDir.replace(/[\\/]+$/, "")}/youtube-session.json`, opts.box);
+  clientPromise = null;
+  signedIn = false;
+  upstreams.clear();
+}
 
 function getClient(): Promise<Innertube> {
   if (!clientPromise) {
-    clientPromise = Innertube.create({ generate_session_locally: true }).catch((err) => {
+    // youtubei.js logs a parser warning for every unknown node, that is noise here
+    Log.setLevel(Log.Level.ERROR);
+    clientPromise = (async () => {
+      const yt = await Innertube.create({ generate_session_locally: true, cache: secretCache as any });
+      yt.session.on("update-credentials", () => void yt.session.oauth.cacheCredentials().catch(() => {}));
+      if (secretCache && (await secretCache.get("youtubei_oauth_credentials"))) {
+        try {
+          await Promise.race([yt.session.signIn(), new Promise<never>((_, r) => setTimeout(() => r(new Error("timed out")), 15_000))]);
+          signedIn = true;
+          youtubeLogin.markLoggedIn(true);
+          log("signed in from saved credentials");
+        } catch (err) {
+          log(`saved login could not be used: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      return yt;
+    })().catch((err) => {
       clientPromise = null;
       throw err;
     });
   }
   return clientPromise;
 }
+
+export const youtubeLogin = createYoutubeLogin({
+  getSession: async () => (await getClient()).session as unknown as LoginSession,
+  onChange: () => {
+    signedIn = youtubeLogin.status().loggedIn;
+    upstreams.clear();
+  },
+});
+
+export const getYoutubeLoginStatus = async (): Promise<YoutubeLoginStatus> => {
+  await getClient().catch(() => {});
+  return youtubeLogin.status();
+};
 
 function parseClock(text: string | undefined): number {
   if (!text) return 0;
@@ -196,8 +243,16 @@ async function resolveClient(yt: Innertube, videoId: string, client: StreamClien
   const failure = await probe(url, userAgent, headers);
   if (failure) throw new Error(`probe failed: ${failure}`);
 
+  // the player gets the bytes from memory, so a googlevideo 403 on a later range cannot reach it. a client whose
+  // url cannot be downloaded whole is rejected here and the next one is tried
+  let buffer: Buffer | undefined;
+  if (contentLength <= MAX_BUFFER_BYTES) {
+    buffer = await downloadWhole({ url, contentLength, userAgent, headers }, { makeCpn });
+  }
+
   const mimeType = (format.mime_type ?? "audio/mp4").split(";")[0]!;
   return {
+    buffer,
     url,
     contentLength,
     mimeType,
@@ -220,7 +275,7 @@ async function resolveUpstream(videoId: string): Promise<ResolvedUpstream> {
   const run = (async () => {
     const yt = await getClient();
     const errors: string[] = [];
-    for (const client of STREAM_CLIENTS) {
+    for (const client of signedIn ? SIGNED_IN_CLIENTS : STREAM_CLIENTS) {
       try {
         const resolved = await Promise.race([
           resolveClient(yt, videoId, client),
@@ -228,6 +283,7 @@ async function resolveUpstream(videoId: string): Promise<ResolvedUpstream> {
         ]);
         log(`${videoId} ok via ${client} (${resolved.mimeType}, ${resolved.contentLength} bytes)`);
         upstreams.set(videoId, resolved);
+        while (upstreams.size > MAX_CACHED) upstreams.delete(upstreams.keys().next().value!);
         return resolved;
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
