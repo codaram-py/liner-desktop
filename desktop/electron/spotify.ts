@@ -23,8 +23,16 @@ export interface SpotifyCredentials {
   clientSecret?: string;
 }
 
+// a logged in user (see spotifyAuth.ts): preferred over client credentials, and the only way to read liked songs
+export interface SpotifyUserSession {
+  status: () => { loggedIn: boolean };
+  getAccessToken: () => Promise<string | null>;
+  invalidate?: () => void;
+}
+
 export interface SpotifyDeps {
   getCredentials: () => SpotifyCredentials;
+  auth?: SpotifyUserSession;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -33,11 +41,13 @@ const API = "https://api.spotify.com/v1";
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
 const LIST_LIMIT = 100;
 
-export type SpotifyKind = "track" | "album" | "playlist";
+export type SpotifyKind = "track" | "album" | "playlist" | "liked";
 
-// open.spotify.com/track/ID, /intl-pt/album/ID, spotify:playlist:ID
+// open.spotify.com/track/ID, /intl-pt/album/ID, spotify:playlist:ID. "liked" is the signed in user's liked songs:
+// open.spotify.com/collection/tracks or spotify:me:liked
 export function parseSpotifyUrl(raw: string): { kind: SpotifyKind; id: string } | null {
   const input = raw.trim();
+  if (/^spotify:me:liked$/i.test(input)) return { kind: "liked", id: "me" };
   const uri = /^spotify:(track|album|playlist):([A-Za-z0-9]{22})$/.exec(input);
   if (uri) return { kind: uri[1] as SpotifyKind, id: uri[2]! };
   try {
@@ -45,6 +55,7 @@ export function parseSpotifyUrl(raw: string): { kind: SpotifyKind; id: string } 
     if (!/^(?:www\.)?open\.spotify\.com$/i.test(url.hostname)) return null;
     const parts = url.pathname.split("/").filter((p) => p && !/^intl-[a-z-]+$/i.test(p));
     const [kind, id] = parts;
+    if (kind === "collection" && id === "tracks") return { kind: "liked", id: "me" };
     if ((kind === "track" || kind === "album" || kind === "playlist") && id && /^[A-Za-z0-9]{22}$/.test(id)) return { kind, id };
   } catch {}
   return null;
@@ -103,8 +114,10 @@ export function createSpotify(deps: SpotifyDeps) {
     const { clientId, clientSecret } = deps.getCredentials();
     return clientId && clientSecret ? { clientId, clientSecret } : null;
   };
+  const loggedIn = () => !!deps.auth?.status().loggedIn;
+  const configured = () => loggedIn() || !!credentials();
 
-  async function getToken(creds: { clientId: string; clientSecret: string }): Promise<string> {
+  async function clientCredentialsToken(creds: { clientId: string; clientSecret: string }): Promise<string> {
     if (token && token.clientId === creds.clientId && token.expiresAt > now() + 60_000) return token.value;
     const res = await fetchImpl(TOKEN_URL, {
       method: "POST",
@@ -123,17 +136,30 @@ export function createSpotify(deps: SpotifyDeps) {
     return token.value;
   }
 
-  async function api<T>(creds: { clientId: string; clientSecret: string }, pathAndQuery: string, retry = true): Promise<T> {
+  // the signed in user wins (private playlists, liked songs), client credentials are the login free fallback
+  async function bearer(): Promise<string> {
+    if (deps.auth) {
+      const user = await deps.auth.getAccessToken();
+      if (user) return user;
+    }
+    const creds = credentials();
+    if (!creds) throw new Error("Spotify is not connected");
+    return clientCredentialsToken(creds);
+  }
+
+  async function api<T>(pathAndQuery: string, retry = true): Promise<T> {
     const res = await fetchImpl(`${API}${pathAndQuery}`, {
-      headers: { authorization: `Bearer ${await getToken(creds)}` },
+      headers: { authorization: `Bearer ${await bearer()}` },
       signal: AbortSignal.timeout(12_000),
     });
     if (res.status === 401 && retry) {
       token = null;
-      return api<T>(creds, pathAndQuery, false);
+      deps.auth?.invalidate?.();
+      return api<T>(pathAndQuery, false);
     }
+    if (res.status === 403 && loggedIn()) throw new Error("Spotify refused this request, log in again to renew the permissions");
     if (res.status === 429) throw new Error(`Spotify is rate limiting this app, retry in ${res.headers.get("retry-after") ?? "a few"}s`);
-    if (res.status === 404) throw new Error("Spotify could not find that item (private playlists are not readable)");
+    if (res.status === 404) throw new Error("Spotify could not find that item (private playlists need you to be logged in)");
     if (!res.ok) throw new Error(`Spotify ${pathAndQuery.split("?")[0]} responded ${res.status}`);
     return (await res.json()) as T;
   }
@@ -156,21 +182,35 @@ export function createSpotify(deps: SpotifyDeps) {
   const clean = (tracks: (SpotifyTrackDto | null)[]) => tracks.filter((t): t is SpotifyTrackDto => t !== null && t.durationMs > 0);
 
   async function search(query: string, limit = 20): Promise<SpotifySearchResult> {
-    const creds = credentials();
-    if (!creds) return { configured: false, tracks: [] };
+    if (!configured()) return { configured: false, tracks: [] };
     const q = query.trim();
     if (!q) return { configured: true, tracks: [] };
-    const res = await api<{ tracks?: { items?: any[] } }>(creds, `/search?type=track&limit=${Math.min(limit, 50)}&q=${encodeURIComponent(q)}`);
+    const res = await api<{ tracks?: { items?: any[] } }>(`/search?type=track&limit=${Math.min(limit, 50)}&q=${encodeURIComponent(q)}`);
     return { configured: true, tracks: clean((res.tracks?.items ?? []).map((t) => toTrack(t))) };
+  }
+
+  // liked songs come 50 at a time, four pages is plenty for a queue
+  async function liked(): Promise<SpotifyTrackDto[]> {
+    const out: SpotifyTrackDto[] = [];
+    for (let offset = 0; offset < LIST_LIMIT * 2; offset += 50) {
+      const page = await api<{ items?: any[]; next?: string | null }>(`/me/tracks?limit=50&offset=${offset}`);
+      out.push(...clean((page.items ?? []).map((i) => toTrack(i.track))));
+      if (!page.next) break;
+    }
+    return out;
   }
 
   async function resolve(raw: string): Promise<SpotifyResolveResult> {
     const parsed = parseSpotifyUrl(raw);
-    const creds = credentials();
-    if (!parsed) return { configured: !!creds, kind: "none", tracks: [] };
+    if (!parsed) return { configured: configured(), kind: "none", tracks: [] };
 
-    if (!creds) {
-      // no credentials: links still open through the public embed page
+    if (parsed.kind === "liked") {
+      if (!loggedIn()) return { configured: configured(), kind: "none", tracks: [] };
+      return { configured: true, kind: "playlist", title: "Músicas curtidas", tracks: await liked() };
+    }
+
+    if (!configured()) {
+      // not connected: links still open through the public embed page
       try {
         const res = await fetchImpl(`https://open.spotify.com/embed/${parsed.kind}/${parsed.id}`, {
           headers: { "user-agent": EMBED_USER_AGENT, "accept-language": "en-US,en;q=0.9" },
@@ -187,23 +227,23 @@ export function createSpotify(deps: SpotifyDeps) {
     }
 
     if (parsed.kind === "track") {
-      const track = toTrack(await api<any>(creds, `/tracks/${parsed.id}`));
+      const track = toTrack(await api<any>(`/tracks/${parsed.id}`));
       return track ? { configured: true, kind: "track", tracks: clean([track]) } : { configured: true, kind: "none", tracks: [] };
     }
 
     if (parsed.kind === "album") {
-      const album = await api<any>(creds, `/albums/${parsed.id}`);
+      const album = await api<any>(`/albums/${parsed.id}`);
       const tracks = clean((album.tracks?.items ?? []).slice(0, LIST_LIMIT).map((t: any) => toTrack(t, album.images)));
       return { configured: true, kind: "album", title: String(album.name ?? "Spotify"), tracks };
     }
 
     const [meta, items] = await Promise.all([
-      api<any>(creds, `/playlists/${parsed.id}?fields=name`),
-      api<{ items?: any[] }>(creds, `/playlists/${parsed.id}/tracks?limit=${LIST_LIMIT}&fields=items(track(id,name,duration_ms,explicit,is_local,type,artists(name),album(images)))`),
+      api<any>(`/playlists/${parsed.id}?fields=name`),
+      api<{ items?: any[] }>(`/playlists/${parsed.id}/tracks?limit=${LIST_LIMIT}&fields=items(track(id,name,duration_ms,explicit,is_local,type,artists(name),album(images)))`),
     ]);
     const tracks = clean((items.items ?? []).map((i) => toTrack(i.track)));
     return { configured: true, kind: "playlist", title: String(meta.name ?? "Spotify"), tracks };
   }
 
-  return { search, resolve, isConfigured: () => !!credentials() };
+  return { search, resolve, isConfigured: configured };
 }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, screen, dialog, session, nativeImage, powerSaveBlocker } from "electron";
+import { app, BrowserWindow, ipcMain, shell, screen, dialog, session, nativeImage, powerSaveBlocker, safeStorage } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "node:path";
 import fs from "node:fs";
@@ -39,6 +39,7 @@ import { getYoutubeStream, resolveYoutubeInput, searchYoutube } from "./youtube.
 import { withOpenCors } from "./cors.js";
 import { getSoundcloudStream, resolveSoundcloudUrl, searchSoundcloud } from "./soundcloud.js";
 import { createSpotify } from "./spotify.js";
+import { createFileSessionStore, createSpotifyAuth } from "./spotifyAuth.js";
 import { readAppConfig } from "./appConfig.js";
 import { LOCAL_DATA_KINDS, loadLocalData, resolveDataDir, saveLocalData, type LocalDataKind } from "./localData.js";
 
@@ -347,7 +348,26 @@ if (!gotTheLock) {
 
     // spotify only supplies metadata (the audio plays from the matching youtube upload). needs the user's own free
     // developer app credentials in config.json, read on every call so editing the file takes effect without a restart
-    const spotify = createSpotify({ getCredentials: () => readAppConfig(localDataDir).spotify ?? {} });
+    // "log in with spotify": official pkce flow in the system browser, only the refresh token is kept (keychain encrypted)
+    const spotifyAuth = createSpotifyAuth({
+      store: createFileSessionStore(path.join(localDataDir, "spotify-session.json"), {
+        isAvailable: () => safeStorage.isEncryptionAvailable(),
+        encrypt: (plain) => safeStorage.encryptString(plain),
+        decrypt: (data) => safeStorage.decryptString(data),
+      }),
+      openExternal: (url) => shell.openExternal(url),
+    });
+    const spotify = createSpotify({ getCredentials: () => readAppConfig(localDataDir).spotify ?? {}, auth: spotifyAuth });
+    ipcMain.handle("spotify:status", () => ({
+      ...spotifyAuth.status(),
+      hasClientId: !!readAppConfig(localDataDir).spotify?.clientId,
+    }));
+    ipcMain.handle("spotify:login", async () => {
+      const clientId = readAppConfig(localDataDir).spotify?.clientId;
+      if (!clientId) throw new Error("save your Spotify Client ID first");
+      return spotifyAuth.login(clientId);
+    });
+    ipcMain.handle("spotify:logout", () => spotifyAuth.logout());
     ipcMain.handle("spotify:search", (_event, query: string, limit?: number) =>
       spotify.search(String(query ?? ""), typeof limit === "number" ? limit : 20),
     );

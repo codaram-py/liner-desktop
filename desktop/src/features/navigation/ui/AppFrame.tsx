@@ -42,6 +42,8 @@ import SearchResultsList from "@/features/search/ui/SearchResultsList";
 import {
   SOURCES,
   SourceFilterBar,
+  SPOTIFY_LIKED_QUERY,
+  SpotifyAccountBar,
   SpotifySetup,
   buildSearchResults,
   useExternalSearch,
@@ -1029,6 +1031,12 @@ export default function AppFrame({ children }: AppFrameProps) {
                   externalSearch.spotifyConfigured === false &&
                   (sourceFilter === "spotify" || /spotify/i.test(searchQuery)) ? (
                     <SpotifySetup onSaved={externalSearch.retry} />
+                  ) : null}
+                  {externalSearchEnabled && externalSearch.spotifyConfigured === true && sourceFilter === "spotify" ? (
+                    <SpotifyAccountBar
+                      onOpenLiked={() => setSearchQuery(SPOTIFY_LIKED_QUERY)}
+                      onLoggedOut={externalSearch.retry}
+                    />
                   ) : null}
                   {externalSearchEnabled && externalSearch.linkMode ? (
                     <div

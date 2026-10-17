@@ -135,7 +135,7 @@ export async function resolveSoundcloudLink(input: string): Promise<LinkResult |
 
 export function isSpotifyLike(query: string): boolean {
   const q = query.trim();
-  return /(?:^|\/\/|\.)open\.spotify\.com\//i.test(q) || /^spotify:(?:track|album|playlist):/i.test(q);
+  return /(?:^|\/\/|\.)open\.spotify\.com\//i.test(q) || /^spotify:(?:track|album|playlist|me:liked)/i.test(q);
 }
 
 function fromSpotifyDto(dto: {
@@ -161,6 +161,9 @@ export async function searchSpotify(query: string): Promise<SpotifySearchOutcome
   const res = await bridge.spotifySearch(query, SEARCH_LIMIT);
   return { configured: res.configured, tracks: res.tracks.map(fromSpotifyDto) };
 }
+
+// the pseudo link behind the "liked songs" button, resolved by the main process like any other spotify link
+export const SPOTIFY_LIKED_QUERY = "spotify:me:liked";
 
 export class SpotifyNotConfiguredError extends Error {
   constructor() {

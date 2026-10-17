@@ -142,7 +142,13 @@ Search merges the Liner catalog with providers that run locally in the app:
 
 Deezer and Apple Music do not give out full streams without a paid, DRM protected session, so only their official 30s clips are played from them directly. Those clips are listed under the **Prévia** chip at the right end of the source filter, never mixed into the normal results.
 
-**Spotify**: pasted track / album / playlist links open without any setup (public embed pages). Searching needs a free app of your own, because the Spotify API has no anonymous search. Open the Spotify chip in the search, paste the Client ID and Secret from <https://developer.spotify.com/dashboard> into the form and save. They end up in `~/Liner/config.json` (you can also edit it by hand), are picked up on the next search and are never touched when your profile is saved.
+**Spotify**: pasted track / album / playlist links open without any setup (public embed pages). Searching needs your Spotify account, because the Spotify API has no anonymous search:
+
+1. Create a free app at <https://developer.spotify.com/dashboard> and add `http://127.0.0.1:8888/callback` under *Redirect URIs*.
+2. Open the Spotify chip in the search, paste the app's **Client ID** and press **Entrar com Spotify**. Your browser opens Spotify's own login page (official PKCE flow, no password or client secret ever reaches the app).
+3. Done. The session lasts until you press *Sair*; the refresh token is stored in `~/Liner/spotify-session.json`, encrypted with the OS keychain when one is available.
+
+Once signed in, private and collaborative playlists open, and the **Músicas curtidas** button loads your liked songs as a queue. The audio still plays from the matching YouTube upload: Spotify's own audio is DRM protected and only plays inside its official players, a Premium plan does not change that. Without logging in you can instead save a Client ID + Secret (`"spotify": { "clientId": "...", "clientSecret": "..." }` in `~/Liner/config.json`) for search only.
 
 ```json
 {

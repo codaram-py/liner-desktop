@@ -6,3 +6,5 @@ export { useExternalSearch } from "./hooks/useExternalSearch";
 export { default as SourceBadges } from "./ui/SourceBadges";
 export { default as SourceFilterBar } from "./ui/SourceFilterBar";
 export { default as SpotifySetup } from "./ui/SpotifySetup";
+export { default as SpotifyAccountBar } from "./ui/SpotifyAccountBar";
+export { SPOTIFY_LIKED_QUERY } from "./providers";

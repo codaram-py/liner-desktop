@@ -204,3 +204,84 @@ describe("embed pages (no credentials)", () => {
     expect(await make().resolve(`https://open.spotify.com/album/${ID}`)).toEqual({ configured: false, kind: "none", tracks: [] });
   });
 });
+
+describe("signed in user", () => {
+  const session = (loggedIn = true) => ({
+    status: () => ({ loggedIn }),
+    getAccessToken: vi.fn(async () => (loggedIn ? "usertok" : null)),
+    invalidate: vi.fn(),
+  });
+
+  const makeWith = (auth: ReturnType<typeof session>, fetchImpl: (url: URL, init?: RequestInit) => Response, credentials: Record<string, string> = {}) =>
+    createSpotify({ getCredentials: () => credentials, auth, fetchImpl: (async (input: any, init?: RequestInit) => fetchImpl(new URL(String(input)), init)) as typeof fetch });
+
+  it("searches with the user's token and no app credentials at all", async () => {
+    const auth = session();
+    const seen: string[] = [];
+    const sp = makeWith(auth, (url, init) => {
+      seen.push(`${url.host}${url.pathname} ${(init!.headers as Record<string, string>).authorization}`);
+      return json({ tracks: { items: [spTrack()] } });
+    });
+    expect(sp.isConfigured()).toBe(true);
+    expect((await sp.search("x")).configured).toBe(true);
+    expect(seen).toEqual(["api.spotify.com/v1/search Bearer usertok"]);
+  });
+
+  it("prefers the user token over client credentials and falls back to them when logged out", async () => {
+    const calls: string[] = [];
+    const handler = (url: URL, init?: RequestInit) => {
+      calls.push(url.host === "accounts.spotify.com" ? "token" : (init!.headers as Record<string, string>).authorization!);
+      return url.host === "accounts.spotify.com" ? json({ access_token: "apptok", expires_in: 3600 }) : json({ tracks: { items: [] } });
+    };
+    await makeWith(session(true), handler, { clientId: "cid", clientSecret: "sec" }).search("x");
+    expect(calls).toEqual(["Bearer usertok"]);
+
+    calls.length = 0;
+    await makeWith(session(false), handler, { clientId: "cid", clientSecret: "sec" }).search("x");
+    expect(calls).toEqual(["token", "Bearer apptok"]);
+  });
+
+  it("reads the liked songs page by page and stops when there is no next page", async () => {
+    const offsets: string[] = [];
+    const sp = makeWith(session(), (url) => {
+      expect(url.pathname).toBe("/v1/me/tracks");
+      offsets.push(url.searchParams.get("offset")!);
+      const first = url.searchParams.get("offset") === "0";
+      return json({ items: [{ track: spTrack({ id: first ? "one" : "two", name: first ? "One" : "Two" }) }], next: first ? "more" : null });
+    });
+    const res = await sp.resolve("spotify:me:liked");
+    expect(res).toMatchObject({ configured: true, kind: "playlist", title: "Músicas curtidas" });
+    expect(res.tracks.map((t) => t.title)).toEqual(["One", "Two"]);
+    expect(offsets).toEqual(["0", "50"]);
+  });
+
+  it("only treats the liked songs as available when logged in", async () => {
+    const out = makeWith(session(false), () => json({}, 500));
+    expect(await out.resolve("https://open.spotify.com/collection/tracks")).toEqual({ configured: false, kind: "none", tracks: [] });
+  });
+
+  it("refreshes through the session on a 401, then says to log in again on a 403", async () => {
+    const auth = session();
+    let first = true;
+    const sp = makeWith(auth, () => {
+      if (first) {
+        first = false;
+        return json({}, 401);
+      }
+      return json({ tracks: { items: [spTrack()] } });
+    });
+    expect((await sp.search("x")).tracks).toHaveLength(1);
+    expect(auth.invalidate).toHaveBeenCalledTimes(1);
+
+    const forbidden = makeWith(session(), () => json({}, 403));
+    await expect(forbidden.search("x")).rejects.toThrow(/log in again/);
+  });
+});
+
+describe("parseSpotifyUrl liked songs", () => {
+  it("recognises the liked songs page and uri", () => {
+    expect(parseSpotifyUrl("spotify:me:liked")).toEqual({ kind: "liked", id: "me" });
+    expect(parseSpotifyUrl("https://open.spotify.com/collection/tracks")).toEqual({ kind: "liked", id: "me" });
+    expect(parseSpotifyUrl("https://open.spotify.com/collection/other")).toBeNull();
+  });
+});
