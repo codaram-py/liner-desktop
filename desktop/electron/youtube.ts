@@ -251,7 +251,9 @@ async function probe(url: string, userAgent: string, headers: Record<string, str
 }
 
 async function resolveClient(yt: Innertube, videoId: string, client: StreamClient): Promise<ResolvedUpstream> {
-  const info = await yt.getInfo(videoId, { client });
+  // getBasicInfo = the /player call only. getInfo also fires /next with the default web context, which a signed in
+  // session answers with 400 (the oauth bearer is tv only) and which the stream does not need anyway
+  const info = await yt.getBasicInfo(videoId, { client });
   const status = info.playability_status?.status;
   if (status && status !== "OK") throw new Error(info.playability_status?.reason || status);
 

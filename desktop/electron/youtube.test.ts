@@ -29,9 +29,16 @@ const fakeYt = {
       { type: "Channel", id: "UC123" },
     ],
   })),
-  getBasicInfo: vi.fn(async (id: string) => ({
-    basic_info: { title: "Song", author: "Artist", duration: 120, is_live: false, thumbnail: [{ url: `https://t/${id}.jpg` }] },
-  })),
+  // stream resolution passes a client that the test scripted in state.infoByClient, metadata lookups do not
+  getBasicInfo: vi.fn(async (id: string, opts?: { client?: string }) => {
+    if (opts?.client && opts.client in state.infoByClient) {
+      state.clients.push(opts.client);
+      const info = state.infoByClient[opts.client];
+      if (info instanceof Error) throw info;
+      return info;
+    }
+    return { basic_info: { title: "Song", author: "Artist", duration: 120, is_live: false, thumbnail: [{ url: `https://t/${id}.jpg` }] } };
+  }),
   getPlaylist: vi.fn(async () => ({
     info: { title: "My list" },
     items: [
@@ -39,17 +46,11 @@ const fakeYt = {
       { id: "bbbbbbbbbbb", title: { text: "Deleted video" }, author: { name: "B" }, duration: { seconds: 0 } },
     ],
   })),
-  getInfo: vi.fn(async (_id: string, opts: { client: string }) => {
-    state.clients.push(opts.client);
-    const info = state.infoByClient[opts.client];
-    if (info instanceof Error) throw info;
-    return info;
-  }),
 };
 
 const fakeAuthYt = {
   session: { player: {}, on: vi.fn(), signIn: vi.fn(async () => {}) },
-  getInfo: vi.fn(async (_id: string, opts: { client: string }) => {
+  getBasicInfo: vi.fn(async (_id: string, opts: { client: string }) => {
     state.clients.push(`auth:${opts.client}`);
     const info = state.infoByClient[`auth:${opts.client}`];
     if (info instanceof Error) throw info;
