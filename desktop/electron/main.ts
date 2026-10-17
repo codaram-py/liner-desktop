@@ -36,6 +36,7 @@ import { OverlayManager } from "./overlay.js";
 import { BundleManager } from "./bundle-manager.js";
 import { createSleepBlocker } from "./sleep-blocker.js";
 import { getYoutubeStream, resolveYoutubeInput, searchYoutube } from "./youtube.js";
+import { getSoundcloudStream, resolveSoundcloudUrl, searchSoundcloud } from "./soundcloud.js";
 import { LOCAL_DATA_KINDS, loadLocalData, resolveDataDir, saveLocalData, type LocalDataKind } from "./localData.js";
 
 // root error handling for main process
@@ -333,6 +334,13 @@ if (!gotTheLock) {
     );
     ipcMain.handle("youtube:resolve", (_event, input: string) => resolveYoutubeInput(String(input ?? "")));
     ipcMain.handle("youtube:stream", (_event, videoId: string) => getYoutubeStream(String(videoId ?? "")));
+
+    // soundcloud provider, same shape as the youtube one
+    ipcMain.handle("soundcloud:search", (_event, query: string, limit?: number) =>
+      searchSoundcloud(String(query ?? ""), typeof limit === "number" ? limit : 20),
+    );
+    ipcMain.handle("soundcloud:resolve", (_event, url: string) => resolveSoundcloudUrl(String(url ?? "")));
+    ipcMain.handle("soundcloud:stream", (_event, trackId: string) => getSoundcloudStream(String(trackId ?? "")));
 
     ipcMain.handle("app:set-icon", async (_event, dataUrl: string) => {
       if (!mainWindow || !dataUrl) return;

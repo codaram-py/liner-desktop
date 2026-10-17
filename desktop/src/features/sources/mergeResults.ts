@@ -1,4 +1,4 @@
-import { SOURCES, isPreviewOnly, sourceOfTrackId, type SourceId, type SourceVariant } from "./types";
+import { SOURCES, sourceOfTrackId, type SourceId, type SourceVariant } from "./types";
 
 export interface MergeableTrack {
   id: string;
@@ -7,6 +7,7 @@ export interface MergeableTrack {
   coverUrl?: string;
   durationMs?: number;
   source?: SourceId;
+  previewOnly?: boolean;
 }
 
 export type MergedTrack<T extends MergeableTrack> = T & {
@@ -54,7 +55,7 @@ function toVariant(track: MergeableTrack, source: SourceId): SourceVariant {
     artists: track.artists,
     coverUrl: track.coverUrl ?? "",
     durationMs: track.durationMs ?? 0,
-    previewOnly: isPreviewOnly(source) || undefined,
+    previewOnly: track.previewOnly || undefined,
   };
 }
 

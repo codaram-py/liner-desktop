@@ -1,7 +1,8 @@
 import type { PlaybackSessionResponse } from "@/shared/contracts";
 import type { Track } from "@/shared/types";
 import { rememberTrack } from "@/shared/local/trackRegistry";
-import { makeExternalId, rawExternalId, sourceOfTrackId, type SourceId } from "./types";
+import { pickBestYoutubeMatch } from "./matchYoutube";
+import { isPreviewTrackId, makeExternalId, rawExternalId, sourceOfTrackId, type SourceId } from "./types";
 
 export type ExternalTrack = Track & { source: SourceId; previewOnly?: boolean; collection?: string };
 
@@ -16,7 +17,7 @@ function toExternal(
   extra?: Partial<ExternalTrack>,
 ): ExternalTrack {
   const track: ExternalTrack = {
-    id: makeExternalId(source, rawId),
+    id: makeExternalId(source, rawId, extra?.previewOnly),
     title: fields.title,
     artists: fields.artists,
     coverUrl: fields.coverUrl,
@@ -62,13 +63,13 @@ export async function searchYoutube(query: string): Promise<ExternalTrack[]> {
   return results.map(fromYoutubeDto);
 }
 
-export interface YoutubeLinkResult {
+export interface LinkResult {
   tracks: ExternalTrack[];
   playlistTitle?: string;
 }
 
 // pasted video / playlist url or bare video id. null when the input is not a youtube link
-export async function resolveYoutubeLink(input: string): Promise<YoutubeLinkResult | null> {
+export async function resolveYoutubeLink(input: string): Promise<LinkResult | null> {
   const bridge = window.linerElectron;
   if (!bridge?.youtubeResolve || !isYoutubeLike(input)) return null;
   const res = await bridge.youtubeResolve(input);
@@ -80,7 +81,54 @@ export async function resolveYoutubeLink(input: string): Promise<YoutubeLinkResu
   };
 }
 
-// ---- deezer / apple music: public catalog endpoints, 30s previews only ----
+// ---- soundcloud (runs in the electron main process, see electron/soundcloud.ts) ----
+
+export function isSoundcloudLike(query: string): boolean {
+  return /(?:^|\/\/|\.)soundcloud\.com\//i.test(query.trim());
+}
+
+function fromSoundcloudDto(dto: {
+  id: string;
+  title: string;
+  artists: string;
+  coverUrl: string;
+  durationMs: number;
+  previewOnly: boolean;
+}): ExternalTrack {
+  return toExternal("soundcloud", dto.id, dto, dto.previewOnly ? { previewOnly: true } : undefined);
+}
+
+export async function searchSoundcloud(query: string): Promise<ExternalTrack[]> {
+  const bridge = window.linerElectron;
+  if (!bridge?.soundcloudSearch) return [];
+  const results = await bridge.soundcloudSearch(query, SEARCH_LIMIT);
+  return results.map(fromSoundcloudDto);
+}
+
+export async function resolveSoundcloudLink(input: string): Promise<LinkResult | null> {
+  const bridge = window.linerElectron;
+  if (!bridge?.soundcloudResolve || !isSoundcloudLike(input)) return null;
+  const res = await bridge.soundcloudResolve(input);
+  if (res.kind === "none" || res.tracks.length === 0) return null;
+  const collection = res.kind === "playlist" ? `sc-playlist:${input.trim()}` : undefined;
+  return {
+    tracks: res.tracks.map((dto) => ({ ...fromSoundcloudDto(dto), collection })),
+    playlistTitle: res.kind === "playlist" ? res.title : undefined,
+  };
+}
+
+// any pasted link we know how to open
+export async function resolveExternalLink(input: string): Promise<LinkResult | null> {
+  return (await resolveYoutubeLink(input)) ?? (await resolveSoundcloudLink(input));
+}
+
+export function isLinkLike(query: string): boolean {
+  return isYoutubeLike(query) || isSoundcloudLike(query);
+}
+
+// ---- deezer / apple music: public catalog endpoints, metadata + 30s clips ----
+// every hit becomes two rows: the song itself (played in full from the matching youtube upload, see resolveExternalPlayback)
+// and the official 30s clip, which is listed under the "Prévia" category
 
 async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(url, { signal });
@@ -88,15 +136,29 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   return (await res.json()) as T;
 }
 
+type CatalogFields = { title: string; artists: string; coverUrl: string; durationMs: number };
+
+function fullAndPreview(
+  source: "deezer" | "apple_music",
+  rawId: string | number,
+  fields: CatalogFields,
+  extra: Partial<ExternalTrack>,
+): ExternalTrack[] {
+  return [
+    toExternal(source, rawId, fields, extra),
+    toExternal(source, rawId, fields, { ...extra, previewOnly: true }),
+  ];
+}
+
 export async function searchDeezer(query: string, signal?: AbortSignal): Promise<ExternalTrack[]> {
   const data = await getJson<{ data?: any[] }>(
     `https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=${SEARCH_LIMIT}`,
     signal,
   );
-  return (data.data ?? [])
+  const rows = (data.data ?? [])
     .filter((item) => item?.id && item?.preview)
-    .map((item) =>
-      toExternal(
+    .flatMap((item) =>
+      fullAndPreview(
         "deezer",
         item.id,
         {
@@ -105,9 +167,10 @@ export async function searchDeezer(query: string, signal?: AbortSignal): Promise
           coverUrl: item.album?.cover_medium || item.album?.cover || "",
           durationMs: (item.duration ?? 0) * 1000,
         },
-        { explicit: item.explicit_lyrics || undefined, previewOnly: true },
+        { explicit: item.explicit_lyrics || undefined },
       ),
     );
+  return rows;
 }
 
 export async function searchAppleMusic(query: string, signal?: AbortSignal): Promise<ExternalTrack[]> {
@@ -117,8 +180,8 @@ export async function searchAppleMusic(query: string, signal?: AbortSignal): Pro
   );
   return (data.results ?? [])
     .filter((item) => item?.trackId && item?.previewUrl)
-    .map((item) =>
-      toExternal(
+    .flatMap((item) =>
+      fullAndPreview(
         "apple_music",
         item.trackId,
         {
@@ -127,46 +190,87 @@ export async function searchAppleMusic(query: string, signal?: AbortSignal): Pro
           coverUrl: String(item.artworkUrl100 ?? "").replace(/\/\d+x\d+bb\./, "/300x300bb."),
           durationMs: item.trackTimeMillis ?? 0,
         },
-        { explicit: item.trackExplicitness === "explicit" || undefined, previewOnly: true },
+        { explicit: item.trackExplicitness === "explicit" || undefined },
       ),
     );
 }
 
 // ---- playback ----
 
-// resolves a stream for ids owned by a local provider. returns null for liner catalog ids
-export async function resolveExternalPlayback(
-  trackId: string,
-  signal?: AbortSignal,
-): Promise<PlaybackSessionResponse | null> {
-  const source = sourceOfTrackId(trackId);
-  if (source === "liner") return null;
-  const raw = rawExternalId(trackId);
+const youtubeMatches = new Map<string, string>();
 
-  if (source === "youtube") {
-    const bridge = window.linerElectron;
-    if (!bridge?.youtubeStream) throw new Error("YouTube playback needs the desktop app");
-    const stream = await bridge.youtubeStream(raw);
-    return {
-      streamUrl: stream.url,
-      mimeType: stream.mimeType,
-      codec: stream.codec,
-      bitrate: stream.bitrate,
-      expiresAt: stream.expiresAt,
-    };
-  }
+// full length audio for a deezer / apple music row: search youtube for the same song and take the best upload
+async function findYoutubeVideoFor(track: PlayableRef): Promise<string | null> {
+  const cached = youtubeMatches.get(track.id);
+  if (cached) return cached;
+  const candidates = await searchYoutube(`${track.artists} ${track.title}`.trim());
+  const best = pickBestYoutubeMatch(
+    { title: track.title, artists: track.artists, durationMs: track.durationMs },
+    candidates,
+  );
+  if (!best) return null;
+  const videoId = rawExternalId(best.id);
+  youtubeMatches.set(track.id, videoId);
+  return videoId;
+}
 
+async function youtubeSession(videoId: string): Promise<PlaybackSessionResponse> {
+  const bridge = window.linerElectron;
+  if (!bridge?.youtubeStream) throw new Error("YouTube playback needs the desktop app");
+  const stream = await bridge.youtubeStream(videoId);
+  return {
+    streamUrl: stream.url,
+    mimeType: stream.mimeType,
+    codec: stream.codec,
+    bitrate: stream.bitrate,
+    expiresAt: stream.expiresAt,
+  };
+}
+
+async function previewSession(source: SourceId, raw: string, signal?: AbortSignal): Promise<PlaybackSessionResponse> {
   if (source === "deezer") {
     const data = await getJson<{ preview?: string }>(`https://api.deezer.com/track/${raw}`, signal);
     if (!data.preview) throw new Error("Deezer returned no preview for this track");
     return { streamUrl: data.preview, mimeType: "audio/mpeg", codec: "aac", bitrate: 128000 };
   }
-
-  const data = await getJson<{ results?: { previewUrl?: string }[] }>(
-    `https://itunes.apple.com/lookup?id=${raw}`,
-    signal,
-  );
+  const data = await getJson<{ results?: { previewUrl?: string }[] }>(`https://itunes.apple.com/lookup?id=${raw}`, signal);
   const preview = data.results?.[0]?.previewUrl;
   if (!preview) throw new Error("Apple Music returned no preview for this track");
   return { streamUrl: preview, mimeType: "audio/mp4", codec: "aac", bitrate: 128000 };
+}
+
+export interface PlayableRef {
+  id: string;
+  title: string;
+  artists: string;
+  durationMs: number;
+}
+
+// resolves a stream for ids owned by a local provider. returns null for liner catalog ids
+export async function resolveExternalPlayback(
+  track: PlayableRef,
+  signal?: AbortSignal,
+): Promise<PlaybackSessionResponse | null> {
+  const source = sourceOfTrackId(track.id);
+  if (source === "liner") return null;
+  const raw = rawExternalId(track.id);
+
+  if (source === "youtube") return youtubeSession(raw);
+
+  if (source === "soundcloud") {
+    const bridge = window.linerElectron;
+    if (!bridge?.soundcloudStream) throw new Error("SoundCloud playback needs the desktop app");
+    const stream = await bridge.soundcloudStream(raw);
+    return { streamUrl: stream.url, mimeType: stream.mimeType, codec: stream.codec, bitrate: stream.bitrate };
+  }
+
+  // dzp: / amp: ids are the official 30s clips
+  if (isPreviewTrackId(track.id)) return previewSession(source, raw, signal);
+
+  const videoId = await findYoutubeVideoFor(track);
+  if (videoId) return youtubeSession(videoId);
+
+  // nothing on youtube matches closely enough, a clip is better than silence
+  console.warn(`no full length match for "${track.artists} - ${track.title}", playing the 30s preview`);
+  return previewSession(source, raw, signal);
 }

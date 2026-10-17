@@ -1,6 +1,6 @@
 import type { TrackArtist as ContractTrackArtist } from "../contracts";
 
-export type SourceId = "liner" | "youtube" | "deezer" | "apple_music";
+export type SourceId = "liner" | "youtube" | "soundcloud" | "deezer" | "apple_music";
 
 export interface TrackArtist {
   id?: string;

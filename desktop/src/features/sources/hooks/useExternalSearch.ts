@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  isYoutubeLike,
-  resolveYoutubeLink,
+  isLinkLike,
+  resolveExternalLink,
   searchAppleMusic,
   searchDeezer,
+  searchSoundcloud,
   searchYoutube,
   type ExternalTrack,
 } from "../providers";
@@ -18,7 +19,7 @@ export interface UseExternalSearchResult {
   tracks: ExternalTrack[];
   loading: boolean;
   hasLoaded: boolean;
-  // set when the query was a pasted youtube url / id, only youtube results are returned then
+  // set when the query was a pasted youtube / soundcloud link, only that link's tracks are returned then
   linkMode: boolean;
   playlistTitle?: string;
 }
@@ -55,11 +56,11 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
 
     const timer = setTimeout(async () => {
       try {
-        if (isYoutubeLike(trimmed)) {
-          const link = await resolveYoutubeLink(trimmed).catch(() => null);
+        if (isLinkLike(trimmed)) {
+          const link = await resolveExternalLink(trimmed).catch(() => null);
           if (!isCurrent()) return;
           if (link) {
-            setBySource({ youtube: link.tracks });
+            setBySource({ [link.tracks[0]!.source]: link.tracks });
             setLinkMode(true);
             setPlaylistTitle(link.playlistTitle);
             setHasLoaded(true);
@@ -74,6 +75,7 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
 
         const providers: [SourceId, Promise<ExternalTrack[]>][] = [
           ["youtube", searchYoutube(trimmed)],
+          ["soundcloud", searchSoundcloud(trimmed)],
           ["deezer", searchDeezer(trimmed, controller.signal)],
           ["apple_music", searchAppleMusic(trimmed, controller.signal)],
         ];

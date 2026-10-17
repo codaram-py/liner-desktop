@@ -693,7 +693,7 @@ export class PlayerRuntime {
 
       // youtube / deezer / apple music ids resolve locally, everything else goes through the liner backend
       const session =
-        (await resolveExternalPlayback(track.id, controller.signal)) ??
+        (await resolveExternalPlayback(track, controller.signal)) ??
         (await api.createPlaybackSession(track.id, undefined, controller.signal));
       this.ttfbMs = Math.round(performance.now() - this.loadStartTime);
 

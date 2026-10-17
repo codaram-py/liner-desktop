@@ -1,6 +1,6 @@
 import { memo, useState } from "react";
 import { previewOnlyFor } from "../buildResults";
-import { SOURCES, type SourceId, type SourceVariant } from "../types";
+import { SOURCES, playsViaYoutube, type SourceId, type SourceVariant } from "../types";
 
 export interface SourceBadgesProps {
   source: SourceId;
@@ -28,6 +28,10 @@ function Pill({
   title?: string;
 }) {
   const info = SOURCES[source];
+  if (!title) {
+    if (previewOnly) title = `${info.label} · prévia de 30s`;
+    else if (playsViaYoutube(source)) title = `${info.label} · toca a música inteira pelo YouTube`;
+  }
   const content = (
     <>
       <span className="h-[6px] w-[6px] rounded-full shrink-0" style={{ backgroundColor: info.color }} />
@@ -81,7 +85,6 @@ function SourceBadges({ source, previewOnly, variants, onPickVariant }: SourceBa
               key={v.id}
               source={v.source}
               previewOnly={v.previewOnly}
-              title={`${SOURCES[v.source].label}${v.previewOnly ? " · 30s preview" : ""}`}
               onClick={() => onPickVariant?.(v)}
             />
           ))

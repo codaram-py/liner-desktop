@@ -1,8 +1,9 @@
 import { interleave, mergeTrackVariants } from "./mergeResults";
 import type { ExternalTrack } from "./providers";
-import { SOURCE_ORDER, isPreviewOnly, sourceOfTrackId, type SourceId, type SourceVariant } from "./types";
+import { SOURCE_ORDER, sourceOfTrackId, type SourceId, type SourceVariant } from "./types";
 
-export type SourceFilter = "all" | SourceId;
+// "preview" is the 30s clips category, it never mixes with the full length results
+export type SourceFilter = "all" | "preview" | SourceId;
 
 type Row = Record<string, any> & { id: string; title: string; artists: string };
 
@@ -45,8 +46,15 @@ export interface BuildSearchResultsInput {
 // merges liner + external tracks into one list, groups copies of the same song and applies the source filter.
 // non-track rows (artists / albums / playlists) only exist in the liner catalog
 export function buildSearchResults({ linerItems, external, sourceFilter }: BuildSearchResultsInput): Row[] {
+  const allExternal: Row[] = external.map((t) => ({ ...t, _type: "track" }));
+  const previewRows = allExternal.filter((r) => r.previewOnly);
+
+  if (sourceFilter === "preview") {
+    return interleave(SOURCE_ORDER.map((source) => previewRows.filter((r) => r.source === source)));
+  }
+
   const linerTracks = linerItems.filter(isTrackRow).map(withSource);
-  const externalRows: Row[] = external.map((t) => ({ ...t, _type: "track" }));
+  const externalRows = allExternal.filter((r) => !r.previewOnly);
 
   const bySource = SOURCE_ORDER.map((source) =>
     source === "liner" ? linerTracks : externalRows.filter((r) => r.source === source),
@@ -71,5 +79,5 @@ export function buildSearchResults({ linerItems, external, sourceFilter }: Build
 }
 
 export function previewOnlyFor(row: { source?: SourceId; previewOnly?: boolean }): boolean {
-  return row.previewOnly ?? (row.source ? isPreviewOnly(row.source) : false);
+  return !!row.previewOnly;
 }

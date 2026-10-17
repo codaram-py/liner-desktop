@@ -40,6 +40,7 @@ import {
 } from "@/features/player";
 import SearchResultsList from "@/features/search/ui/SearchResultsList";
 import {
+  SOURCES,
   SourceFilterBar,
   buildSearchResults,
   useExternalSearch,
@@ -1020,6 +1021,7 @@ export default function AppFrame({ children }: AppFrameProps) {
                       value={sourceFilter}
                       onChange={setSourceFilter}
                       allLabel={t("common.all")}
+                      previewCount={externalSearch.tracks.filter((track) => track.previewOnly).length}
                     />
                   ) : null}
                   {externalSearchEnabled && externalSearch.linkMode ? (
@@ -1027,9 +1029,10 @@ export default function AppFrame({ children }: AppFrameProps) {
                       className="px-[16px] pb-[6px] text-[12px] text-text-tertiary shrink-0"
                       style={{ fontFamily: "var(--font-inter), sans-serif" }}
                     >
-                      {externalSearch.playlistTitle
-                        ? `YouTube · ${externalSearch.playlistTitle}`
-                        : "YouTube"}
+                      {(() => {
+                        const label = SOURCES[externalSearch.tracks[0]?.source ?? "youtube"].label;
+                        return externalSearch.playlistTitle ? `${label} · ${externalSearch.playlistTitle}` : label;
+                      })()}
                     </div>
                   ) : null}
 

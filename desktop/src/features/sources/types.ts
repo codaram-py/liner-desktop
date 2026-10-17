@@ -13,24 +13,44 @@ export interface SourceInfo {
 export const SOURCES: Record<SourceId, SourceInfo> = {
   liner: { id: "liner", label: "Liner", color: "#8b93ff", priority: 0 },
   youtube: { id: "youtube", label: "YouTube", color: "#ff2d46", priority: 1 },
-  deezer: { id: "deezer", label: "Deezer", color: "#a238ff", priority: 2 },
-  apple_music: { id: "apple_music", label: "Apple Music", color: "#fa5c7c", priority: 3 },
+  soundcloud: { id: "soundcloud", label: "SoundCloud", color: "#ff7a1a", priority: 2 },
+  deezer: { id: "deezer", label: "Deezer", color: "#a238ff", priority: 3 },
+  apple_music: { id: "apple_music", label: "Apple Music", color: "#fa5c7c", priority: 4 },
 };
 
-export const SOURCE_ORDER: SourceId[] = ["liner", "youtube", "deezer", "apple_music"];
+export const SOURCE_ORDER: SourceId[] = ["liner", "youtube", "soundcloud", "deezer", "apple_music"];
+
+// sources that only hand us metadata: the full track is played from the matching youtube upload
+export function playsViaYoutube(source: SourceId): boolean {
+  return source === "deezer" || source === "apple_music";
+}
 
 // id prefixes for tracks that do not come from the liner catalog, playback is resolved locally
 const ID_PREFIX: Record<Exclude<SourceId, "liner">, string> = {
   youtube: "yt:",
+  soundcloud: "sc:",
   deezer: "dz:",
   apple_music: "am:",
 };
 
-export function makeExternalId(source: Exclude<SourceId, "liner">, rawId: string | number): string {
-  return `${ID_PREFIX[source]}${rawId}`;
+// the official 30s clips of deezer / apple music get their own ids so the same song can exist as a full row and a preview row
+const PREVIEW_PREFIX: Partial<Record<Exclude<SourceId, "liner">, string>> = {
+  deezer: "dzp:",
+  apple_music: "amp:",
+};
+
+export function makeExternalId(source: Exclude<SourceId, "liner">, rawId: string | number, preview = false): string {
+  return `${(preview && PREVIEW_PREFIX[source]) || ID_PREFIX[source]}${rawId}`;
+}
+
+export function isPreviewTrackId(id: string): boolean {
+  return Object.values(PREVIEW_PREFIX).some((prefix) => id.startsWith(prefix));
 }
 
 export function sourceOfTrackId(id: string): SourceId {
+  for (const [source, prefix] of Object.entries(PREVIEW_PREFIX)) {
+    if (id.startsWith(prefix!)) return source as SourceId;
+  }
   for (const [source, prefix] of Object.entries(ID_PREFIX)) {
     if (id.startsWith(prefix)) return source as SourceId;
   }
@@ -44,11 +64,6 @@ export function isExternalTrackId(id: string | null | undefined): boolean {
 export function rawExternalId(id: string): string {
   const colon = id.indexOf(":");
   return colon === -1 ? id : id.slice(colon + 1);
-}
-
-// deezer / apple music only expose 30s clips without a subscription token
-export function isPreviewOnly(source: SourceId): boolean {
-  return source === "deezer" || source === "apple_music";
 }
 
 export interface SourceVariant {
