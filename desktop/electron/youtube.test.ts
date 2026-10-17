@@ -47,8 +47,19 @@ const fakeYt = {
   }),
 };
 
+const fakeAuthYt = {
+  session: { player: {}, on: vi.fn(), signIn: vi.fn(async () => {}) },
+  getInfo: vi.fn(async (_id: string, opts: { client: string }) => {
+    state.clients.push(`auth:${opts.client}`);
+    const info = state.infoByClient[`auth:${opts.client}`];
+    if (info instanceof Error) throw info;
+    return info;
+  }),
+};
+
 vi.mock("youtubei.js", () => ({
-  Innertube: { create: vi.fn(async () => fakeYt) },
+  // the signed in session is the one created with a cache; the anonymous one is created without
+  Innertube: { create: vi.fn(async (opts?: { cache?: unknown }) => (opts?.cache ? fakeAuthYt : fakeYt)) },
   Log: { setLevel: vi.fn(), Level: { ERROR: 1 } },
   Constants: {
     CLIENTS: { IOS: { USER_AGENT: "ios-ua" }, ANDROID_VR: { USER_AGENT: "vr-ua" }, TV_SIMPLY: { USER_AGENT: "tvs-ua" }, WEB: {} },
@@ -64,7 +75,11 @@ vi.stubGlobal("fetch", (input: any, init?: RequestInit) => {
   return url.startsWith("https://rr1.googlevideo.com") ? googlevideo(url, init) : realFetch(input, init);
 });
 
-import { getYoutubeStream, resolveYoutubeInput, searchYoutube } from "./youtube";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { configureYoutube, getYoutubeStream, getYoutubeLoginStatus, resolveYoutubeInput, searchYoutube } from "./youtube";
+import { createSecureFileCache, OAUTH_KEY } from "./secureFileCache";
 
 beforeEach(() => {
   state.clients = [];
@@ -193,5 +208,36 @@ describe("getYoutubeStream", () => {
   it("reports every client's reason when none works", async () => {
     for (const c of ["ANDROID_VR", "TV_SIMPLY", "TV_EMBEDDED", "WEB_EMBEDDED", "TV", "ANDROID", "IOS", "WEB"]) state.infoByClient[c] = new Error(`${c} failed`);
     await expect(getYoutubeStream("deadvideo01")).rejects.toThrow(/ANDROID_VR: ANDROID_VR failed.*WEB: WEB failed/);
+  });
+});
+
+describe("signed in session", () => {
+  it("uses the saved login only for the tv clients and keeps everything else anonymous", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "yt-login-"));
+    const box = { isAvailable: () => false, encrypt: () => Buffer.alloc(0), decrypt: () => "" };
+    await createSecureFileCache(path.join(dir, "youtube-session.json"), box).set(OAUTH_KEY, new TextEncoder().encode("{}").buffer as ArrayBuffer);
+    configureYoutube({ dataDir: dir, box });
+
+    expect(await getYoutubeLoginStatus()).toEqual({ loggedIn: true });
+    expect(fakeAuthYt.session.signIn).toHaveBeenCalledTimes(1);
+
+    state.infoByClient["auth:TV"] = {
+      playability_status: { status: "OK" },
+      chooseFormat: vi.fn(() => fakeFormat('audio/mp4; codecs="mp4a.40.2"', "https://rr1.googlevideo.com/videoplayback?c=TV")),
+    };
+    googlevideo.mockReset();
+    const BYTES = Buffer.alloc(400, 1);
+    googlevideo.mockImplementation(async (url) => {
+      const [a, b] = new URL(url).searchParams.get("range")!.split("-").map(Number);
+      return new Response(BYTES.subarray(a, b! + 1));
+    });
+
+    await getYoutubeStream("signedinvid");
+    expect(state.clients).toEqual(["auth:TV"]); // no anonymous client was needed
+
+    // search never goes through the signed in session (its bearer token makes youtube answer 400 there)
+    fakeYt.search.mockClear();
+    await searchYoutube("x");
+    expect(fakeYt.search).toHaveBeenCalled();
   });
 });

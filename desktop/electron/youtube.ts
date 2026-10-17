@@ -47,49 +47,72 @@ interface ResolvedUpstream extends Upstream {
 
 const log = (message: string) => console.log(`\x1b[44;37m youtube \x1b[0m ${message}`);
 
-// a signed in session (tv device flow) is what gets past "sign in to confirm you're not a bot", so the tv client leads then
-const SIGNED_IN_CLIENTS: readonly StreamClient[] = ["TV", "ANDROID_VR", "TV_SIMPLY", "WEB_EMBEDDED", "TV_EMBEDDED", "ANDROID", "IOS", "WEB"];
+// the oauth token belongs to the tv app: youtubei.js sends it as a bearer on EVERY request of a signed in session and
+// youtube answers 400 to anything that is not a tv client (search included). so there are two sessions: an anonymous one
+// for search, metadata and the regular clients, and a signed in one used only for the tv clients
+const AUTH_CLIENTS: readonly StreamClient[] = ["TV", "TV_SIMPLY", "TV_EMBEDDED"];
 
-let clientPromise: Promise<Innertube> | null = null;
+let anonPromise: Promise<Innertube> | null = null;
+let authPromise: Promise<Innertube> | null = null;
 let secretCache: ReturnType<typeof createSecureFileCache> | undefined;
 let signedIn = false;
 
 // call once at startup: google login (if any) is kept in <dataDir>/youtube-session.json, encrypted with the os keychain
 export function configureYoutube(opts: { dataDir: string; box: SecretBox }): void {
   secretCache = createSecureFileCache(`${opts.dataDir.replace(/[\\/]+$/, "")}/youtube-session.json`, opts.box);
-  clientPromise = null;
+  anonPromise = null;
+  authPromise = null;
   signedIn = false;
   upstreams.clear();
 }
 
 function getClient(): Promise<Innertube> {
-  if (!clientPromise) {
+  if (!anonPromise) {
     // youtubei.js logs a parser warning for every unknown node, that is noise here
     Log.setLevel(Log.Level.ERROR);
-    clientPromise = (async () => {
-      const yt = await Innertube.create({ generate_session_locally: true, cache: secretCache as any });
-      yt.session.on("update-credentials", () => void yt.session.oauth.cacheCredentials().catch(() => {}));
-      if (secretCache && (await secretCache.get("youtubei_oauth_credentials"))) {
-        try {
-          await Promise.race([yt.session.signIn(), new Promise<never>((_, r) => setTimeout(() => r(new Error("timed out")), 15_000))]);
-          signedIn = true;
-          youtubeLogin.markLoggedIn(true);
-          log("signed in from saved credentials");
-        } catch (err) {
-          log(`saved login could not be used: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      return yt;
-    })().catch((err) => {
-      clientPromise = null;
+    anonPromise = Innertube.create({ generate_session_locally: true }).catch((err) => {
+      anonPromise = null;
       throw err;
     });
   }
-  return clientPromise;
+  return anonPromise;
+}
+
+// the signed in session. a real (not locally generated) visitor id, the account's tokens come from the secure cache
+function getAuthClient(): Promise<Innertube> {
+  if (!authPromise) {
+    Log.setLevel(Log.Level.ERROR);
+    authPromise = (async () => {
+      const yt = await Innertube.create({ cache: secretCache as any });
+      yt.session.on("update-credentials", () => void yt.session.oauth.cacheCredentials().catch(() => {}));
+      return yt;
+    })().catch((err) => {
+      authPromise = null;
+      throw err;
+    });
+  }
+  return authPromise;
+}
+
+// silent sign in from saved credentials, once. false = nothing saved or the saved login is dead
+async function restoreLogin(): Promise<boolean> {
+  if (signedIn) return true;
+  if (!secretCache || !(await secretCache.get("youtubei_oauth_credentials"))) return false;
+  try {
+    const yt = await getAuthClient();
+    await Promise.race([yt.session.signIn(), new Promise<never>((_, r) => setTimeout(() => r(new Error("timed out")), 15_000))]);
+    signedIn = true;
+    youtubeLogin.markLoggedIn(true);
+    log("signed in from saved credentials");
+    return true;
+  } catch (err) {
+    log(`saved login could not be used: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
 }
 
 export const youtubeLogin = createYoutubeLogin({
-  getSession: async () => (await getClient()).session as unknown as LoginSession,
+  getSession: async () => (await getAuthClient()).session as unknown as LoginSession,
   onChange: () => {
     signedIn = youtubeLogin.status().loggedIn;
     upstreams.clear();
@@ -97,7 +120,7 @@ export const youtubeLogin = createYoutubeLogin({
 });
 
 export const getYoutubeLoginStatus = async (): Promise<YoutubeLoginStatus> => {
-  await getClient().catch(() => {});
+  await restoreLogin();
   return youtubeLogin.status();
 };
 
@@ -273,22 +296,30 @@ async function resolveUpstream(videoId: string): Promise<ResolvedUpstream> {
   if (pending) return pending;
 
   const run = (async () => {
-    const yt = await getClient();
+    const anon = await getClient();
+    await restoreLogin();
     const errors: string[] = [];
-    for (const client of signedIn ? SIGNED_IN_CLIENTS : STREAM_CLIENTS) {
+    const candidates: { yt: Innertube; client: StreamClient; tag: string }[] = [];
+    if (signedIn) {
+      const auth = await getAuthClient();
+      for (const client of AUTH_CLIENTS) candidates.push({ yt: auth, client, tag: `${client}+login` });
+    }
+    for (const client of STREAM_CLIENTS) candidates.push({ yt: anon, client, tag: client });
+
+    for (const { yt, client, tag } of candidates) {
       try {
         const resolved = await Promise.race([
           resolveClient(yt, videoId, client),
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${CLIENT_TIMEOUT_MS / 1000}s`)), CLIENT_TIMEOUT_MS)),
         ]);
-        log(`${videoId} ok via ${client} (${resolved.mimeType}, ${resolved.contentLength} bytes)`);
+        log(`${videoId} ok via ${tag} (${resolved.mimeType}, ${resolved.contentLength} bytes)`);
         upstreams.set(videoId, resolved);
         while (upstreams.size > MAX_CACHED) upstreams.delete(upstreams.keys().next().value!);
         return resolved;
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
-        log(`${videoId} ${client} failed: ${reason}`);
-        errors.push(`${client}: ${reason}`);
+        log(`${videoId} ${tag} failed: ${reason}`);
+        errors.push(`${tag}: ${reason}`);
       }
     }
     throw new Error(`no playable audio stream (${errors.join("; ")})`);
