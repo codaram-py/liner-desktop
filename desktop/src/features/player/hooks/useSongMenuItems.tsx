@@ -19,6 +19,7 @@ import {
 } from "@/features/library";
 import { useTranslation } from "@/languages";
 import { showToast } from "@/shared/ui";
+import { rememberTrack } from "@/shared/local/trackRegistry";
 
 export interface SongMenuContext {
   id?: string;
@@ -49,6 +50,11 @@ export function useSongMenuItems(ctx: SongMenuContext): DropdownMenuItem[] {
     playlistItemId,
     playlistTitle,
   } = ctx;
+
+  // the local library saves whatever metadata it saw for this id when it gets liked / added to a playlist
+  if (id && (!searchType || searchType === "track")) {
+    rememberTrack({ id, title, artists, coverUrl, durationMs });
+  }
 
   const { data: playlistsData } = usePlaylistsList();
 

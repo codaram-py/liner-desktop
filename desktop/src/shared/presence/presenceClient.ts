@@ -1,6 +1,7 @@
 import { getAuthSession, getValidAccessToken } from "../api/auth-session";
 import { getApiBaseUrl } from "../api/baseUrl";
 import { APP_VERSION } from "../config/version";
+import { isLocalMode } from "../local/mode";
 
 const DEFAULT_PING_INTERVAL_MS = 25_000;
 const INITIAL_RECONNECT_DELAY_MS = 2_000;
@@ -36,6 +37,7 @@ export class PresenceClient {
 
   // starts presence background lifecycle and registers system listeners
   start(): void {
+    if (isLocalMode()) return;
     if (this.isRunning) return;
     this.isRunning = true;
     this.isDestroyed = false;

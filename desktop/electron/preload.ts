@@ -120,6 +120,9 @@ export interface LinerElectronApi {
   updateOverlaySettings: (settings: any) => void;
   onOverlaySettingsChanged: (cb: (settings: any) => void) => () => void;
   onOverlayVisibility: (cb: (visible: boolean) => void) => () => void;
+  localDataLoad: () => Promise<{ dir: string; config: unknown | null; library: unknown | null }>;
+  localDataSave: (kind: "config" | "library", data: unknown) => Promise<{ ok: boolean; error?: string }>;
+  localDataOpenFolder: () => Promise<boolean>;
   youtubeSearch: (query: string, limit?: number) => Promise<YoutubeTrackDto[]>;
   youtubeResolve: (input: string) => Promise<YoutubeResolveResult>;
   youtubeStream: (videoId: string) => Promise<YoutubeStreamDto>;
@@ -302,6 +305,9 @@ const api: LinerElectronApi = {
       ipcRenderer.removeListener("overlay:visibility", listener);
     };
   },
+  localDataLoad: () => ipcRenderer.invoke("localdata:load"),
+  localDataSave: (kind, data) => ipcRenderer.invoke("localdata:save", kind, data),
+  localDataOpenFolder: () => ipcRenderer.invoke("localdata:open-folder"),
   youtubeSearch: (query, limit) => ipcRenderer.invoke("youtube:search", query, limit),
   youtubeResolve: (input) => ipcRenderer.invoke("youtube:resolve", input),
   youtubeStream: (videoId) => ipcRenderer.invoke("youtube:stream", videoId),

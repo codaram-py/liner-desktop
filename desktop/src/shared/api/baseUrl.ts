@@ -1,3 +1,4 @@
+import { isLocalMode } from "../local/mode";
 // primary api and polish edge relay fallback
 export const DEFAULT_PRIMARY_API = "https://api.tryliner.fun";
 export const FALLBACK_EDGE_API = "http://edge.tryliner.fun:10518";
@@ -51,6 +52,7 @@ export function switchToPrimaryApi(): void {
 // eagerly probes primary health on launch and switches to edge if cloudflare is unreachable
 export function initApiEndpointProbe(timeoutMs = HEALTH_TIMEOUT_MS): Promise<string> {
   if (probePromise) return probePromise;
+  if (isLocalMode()) return Promise.resolve(currentBaseUrl);
   const envUrl = import.meta.env.VITE_API_URL as string | undefined;
   if (isExplicitCustomOverride(envUrl)) {
     return Promise.resolve(currentBaseUrl);

@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
-import { CloseLine, Search2Line, CloseCircleFill, ExitLine } from "@mingcute/react";
+import { CloseLine, Search2Line, CloseCircleFill, ExitLine, FolderOpenLine } from "@mingcute/react";
 import {
   Play,
   Palette,
@@ -18,6 +18,8 @@ import { UserAvatar } from "@/shared/ui";
 import { useTranslation, getTranslationsForAllLocales } from "@/languages";
 import { useModalStore } from "@/features/library";
 import { useAuthStore } from "@/features/auth";
+import { isLocalMode } from "@/shared/local/mode";
+import { openLocalDataFolder } from "@/shared/local/localStore";
 import {
   PlaybackTab,
   AppearanceTab,
@@ -328,18 +330,30 @@ export default function SettingsModal() {
                 {handle}
               </span>
             </span>
-            <button
-              type="button"
-              onClick={async () => {
-                handleClose();
-                await logout();
-              }}
-              title={t("settings.profile.sign_out") || "Log out"}
-              aria-label={t("settings.profile.sign_out") || "Log out"}
-              className="p-1.5 rounded-md text-text-tertiary hover:text-[#E81123] hover:bg-border-alpha-14 transition-colors border-0 bg-transparent cursor-pointer flex items-center justify-center shrink-0"
-            >
-              <ExitLine size={18} className="shrink-0" />
-            </button>
+            {isLocalMode() ? (
+              <button
+                type="button"
+                onClick={() => void openLocalDataFolder()}
+                title="Abrir a pasta dos seus dados (config.json e library.json)"
+                aria-label="Abrir a pasta dos seus dados"
+                className="p-1.5 rounded-md text-text-tertiary hover:text-text-primary hover:bg-border-alpha-14 transition-colors border-0 bg-transparent cursor-pointer flex items-center justify-center shrink-0"
+              >
+                <FolderOpenLine size={18} className="shrink-0" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={async () => {
+                  handleClose();
+                  await logout();
+                }}
+                title={t("settings.profile.sign_out") || "Log out"}
+                aria-label={t("settings.profile.sign_out") || "Log out"}
+                className="p-1.5 rounded-md text-text-tertiary hover:text-[#E81123] hover:bg-border-alpha-14 transition-colors border-0 bg-transparent cursor-pointer flex items-center justify-center shrink-0"
+              >
+                <ExitLine size={18} className="shrink-0" />
+              </button>
+            )}
           </div>
         </div>
       </aside>

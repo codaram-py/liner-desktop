@@ -1,5 +1,6 @@
 import type { PlaybackSessionResponse } from "@/shared/contracts";
 import type { Track } from "@/shared/types";
+import { rememberTrack } from "@/shared/local/trackRegistry";
 import { makeExternalId, rawExternalId, sourceOfTrackId, type SourceId } from "./types";
 
 export type ExternalTrack = Track & { source: SourceId; previewOnly?: boolean; collection?: string };
@@ -14,7 +15,7 @@ function toExternal(
   fields: { title: string; artists: string; coverUrl: string; durationMs: number },
   extra?: Partial<ExternalTrack>,
 ): ExternalTrack {
-  return {
+  const track: ExternalTrack = {
     id: makeExternalId(source, rawId),
     title: fields.title,
     artists: fields.artists,
@@ -24,6 +25,8 @@ function toExternal(
     source,
     ...extra,
   };
+  rememberTrack(track);
+  return track;
 }
 
 // "Artist - Song (Official Video)" -> { artist: "Artist", title: "Song" }, otherwise keep the channel as artist

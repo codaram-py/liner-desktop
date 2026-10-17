@@ -36,6 +36,7 @@ import { OverlayManager } from "./overlay.js";
 import { BundleManager } from "./bundle-manager.js";
 import { createSleepBlocker } from "./sleep-blocker.js";
 import { getYoutubeStream, resolveYoutubeInput, searchYoutube } from "./youtube.js";
+import { LOCAL_DATA_KINDS, loadLocalData, resolveDataDir, saveLocalData, type LocalDataKind } from "./localData.js";
 
 // root error handling for main process
 process.on("uncaughtException", (error) => {
@@ -307,6 +308,23 @@ if (!gotTheLock) {
 
     ipcMain.handle("app:get-version", () => {
       return app.getVersion();
+    });
+
+    // offline profile + library on disk (~/Liner by default, LINER_DATA_DIR overrides)
+    const localDataDir = resolveDataDir(app.getPath("home"));
+    ipcMain.handle("localdata:load", () => loadLocalData(localDataDir));
+    ipcMain.handle("localdata:save", (_event, kind: LocalDataKind, data: unknown) => {
+      if (!LOCAL_DATA_KINDS.includes(kind)) return { ok: false, error: "unknown data kind" };
+      try {
+        saveLocalData(localDataDir, kind, data);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    });
+    ipcMain.handle("localdata:open-folder", async () => {
+      fs.mkdirSync(localDataDir, { recursive: true });
+      return (await shell.openPath(localDataDir)) === "";
     });
 
     // local youtube provider (search / url resolve / audio stream), no liner backend involved

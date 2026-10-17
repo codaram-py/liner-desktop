@@ -41,6 +41,8 @@ function translate(key: string, vars?: Record<string, string | number>) {
 }
 
 import { DEFAULT_PRIMARY_API, getApiBaseUrl, switchToFallbackEdge, switchToPrimaryApi } from "./baseUrl";
+import { isLocalMode } from "@/shared/local/mode";
+import { LocalRouteError, handleLocalRequest } from "@/shared/local/localApi";
 
 const CLIENT_VERSION =
   (import.meta.env.VITE_CLIENT_VERSION as string | undefined) || "1.0.4-desktop";
@@ -450,12 +452,23 @@ async function executeRequest<T>(
   return res.json() as Promise<T>;
 }
 
+// local mode answers from ~/Liner, nothing here ever touches the network
+async function requestLocal<T>(path: string, init?: RequestInit): Promise<T> {
+  try {
+    return await handleLocalRequest<T>(path, init);
+  } catch (err) {
+    if (err instanceof LocalRouteError) throw new ApiError(err.status, err.message, err.code);
+    throw err;
+  }
+}
+
 async function request<T>(
   path: string,
   init?: RequestInit,
   allowRefresh = true,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
+  if (isLocalMode()) return requestLocal<T>(path, init);
   const method = (init?.method ?? "GET").toUpperCase();
   if (method === "GET" && !init?.signal) {
     const key = `${path}::${allowRefresh}`;
@@ -949,6 +962,7 @@ export const api = {
     id: string,
     signal?: AbortSignal,
   ): AsyncGenerator<LyricsStreamEvent> {
+    if (isLocalMode()) return;
     const path = `/v1/tracks/${encodeURIComponent(id)}/lyrics`;
     const signedHeaders = await signApiRequest("GET", path);
     const accessToken = await getValidAccessToken();

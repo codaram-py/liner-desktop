@@ -18,6 +18,8 @@ import {
 import { toClientTrack } from "@/shared/api/track";
 import { log } from "@/shared/utils/logger";
 import { isExternalTrackId } from "@/features/sources/types";
+import { isLocalMode } from "@/shared/local/mode";
+import { rememberTracks } from "@/shared/local/trackRegistry";
 import {
   parseRawLyrics,
   useLyricsStore,
@@ -217,8 +219,8 @@ class PlaybackTelemetryTracker {
   }
 
   private sendEvent(payload: RecordPlaybackEventRequest) {
-    // the liner backend does not know youtube / deezer / apple music ids
-    if (isExternalTrackId(payload.trackId)) return;
+    // the liner backend does not know youtube / deezer / apple music ids, local history does
+    if (isExternalTrackId(payload.trackId) && !isLocalMode()) return;
     void api.recordPlaybackEvent(payload).catch((err) => {
       log(
         "yellow",
@@ -385,6 +387,7 @@ class PlayerEngine {
     preserveQueue?: boolean,
   ): Promise<void> {
     const store = usePlayerStore.getState();
+    rememberTracks([track, ...(queue ?? [])]);
     const nextQueue = this.normalizeQueue(queue ?? [track], track);
     const nextIndex =
       queueIndex !== undefined
@@ -801,6 +804,7 @@ class PlayerEngine {
   }
 
   public addToQueue(track: Track): void {
+    rememberTracks([track]);
     const store = usePlayerStore.getState();
     const newQueue = [...store.queue, track];
     store.setQueue(newQueue);

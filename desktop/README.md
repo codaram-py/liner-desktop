@@ -110,6 +110,24 @@ bun run dev
 
 ---
 
+## Local mode
+
+By default the app runs without a Liner account and without the Liner backend: no login screen, nothing is sent to their servers. Your data lives in plain json files you can open, back up or edit:
+
+```
+~/Liner/
+├── config.json    # profile: name, username, avatar, bio
+└── library.json   # liked tracks, playlists, play history
+```
+
+Set `LINER_DATA_DIR` to use another folder. The folder button next to your name in Settings opens it. Writes are atomic and a corrupt file is moved aside (`*.corrupt-<timestamp>`) instead of deleted.
+
+What still needs the Liner servers and is empty in local mode: catalog search, recommendations, charts, lyrics, playlist import. YouTube, Deezer and Apple Music search/playback (see Sources) work without them.
+
+Build with `VITE_LINER_ONLINE=true` to get the original login flow back.
+
+---
+
 ## Sources
 
 Search merges the Liner catalog with providers that run locally in the app:

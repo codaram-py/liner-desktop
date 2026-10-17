@@ -10,6 +10,9 @@ import {
   type UpdateProfileInput,
 } from "@/shared/api";
 import { usePlayerStore, playerRuntime } from "@/features/player";
+import { isLocalMode } from "@/shared/local/mode";
+import { getLocalAuthUser } from "@/shared/local/localApi";
+import { initLocalStore } from "@/shared/local/localStore";
 
 export type AuthStatus = "initializing" | "authenticated" | "anonymous";
 export type AuthState = {
@@ -31,6 +34,20 @@ export const useAuthStore = create<AuthState>((set) => ({
   status: "initializing",
   user: null,
   initialize: async () => {
+    if (isLocalMode()) {
+      // no account: the profile lives in ~/Liner/config.json. the session below is only a marker for the code that checks it
+      await initLocalStore();
+      const user = getLocalAuthUser();
+      setAuthSession({
+        accessToken: "local",
+        refreshToken: "local",
+        accessTokenExpiresAt: "2999-01-01T00:00:00.000Z",
+        expiresAt: 32503680000000,
+        user,
+      });
+      set({ status: "authenticated", user });
+      return;
+    }
     const stored = getAuthSession();
     if (!stored) {
       set({ status: "anonymous", user: null });
@@ -117,6 +134,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     return updated;
   },
   logout: async () => {
+    // nothing to sign out of in local mode
+    if (isLocalMode()) return;
     try {
       usePlayerStore.getState().dispatch({ type: "PAUSE_REQUESTED" });
       playerRuntime?.pause();

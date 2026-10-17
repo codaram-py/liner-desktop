@@ -1,4 +1,5 @@
 import { mediaUrl } from "./api";
+import { rememberTrack } from "../local/trackRegistry";
 import type { ApiTrack } from "../contracts";
 import type { Track } from "../types";
 
@@ -74,7 +75,7 @@ export function toClientTrack(source: any): Track {
         }
       : undefined;
 
-  return {
+  const track: Track = {
     id: source.id,
     title: source.title,
     artists: artistsString,
@@ -86,5 +87,6 @@ export function toClientTrack(source: any): Track {
     explicit: source.explicit,
     album: album && (album.id || album.title) ? album : undefined,
   };
+  rememberTrack(track);
+  return track;
 }
-
