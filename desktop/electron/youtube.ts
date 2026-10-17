@@ -160,8 +160,15 @@ function toTrack(node: any): YoutubeTrackDto | null {
 export async function searchYoutube(query: string, limit = 20): Promise<YoutubeTrackDto[]> {
   const q = query.trim();
   if (!q) return [];
-  const yt = await getClient();
-  const res = await yt.search(q);
+  let res;
+  try {
+    res = await (await getClient()).search(q);
+  } catch (err) {
+    // a stale session (expired visitor data, a half initialised client) is the usual cause: start a fresh one once
+    log(`search failed, retrying with a new session: ${err instanceof Error ? err.message : String(err)}`);
+    anonPromise = null;
+    res = await (await getClient()).search(q);
+  }
   const out: YoutubeTrackDto[] = [];
   for (const node of res.results as any[]) {
     if (node?.type !== "Video") continue;

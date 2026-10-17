@@ -11,6 +11,7 @@ import {
   searchYoutube,
   type ExternalTrack,
 } from "../providers";
+import { describeStreamError } from "../streamError";
 import { SOURCE_ORDER, type SourceId } from "../types";
 
 export interface UseExternalSearchOptions {
@@ -27,6 +28,8 @@ export interface UseExternalSearchResult {
   playlistTitle?: string;
   // null until the first spotify answer, false when config.json has no client id / secret yet
   spotifyConfigured: boolean | null;
+  // why a provider returned nothing (its search threw), keyed by source
+  errors: Partial<Record<SourceId, string>>;
   // runs the current search again (after saving spotify credentials)
   retry: () => void;
 }
@@ -41,6 +44,7 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
   const [linkMode, setLinkMode] = useState(false);
   const [playlistTitle, setPlaylistTitle] = useState<string | undefined>();
   const [spotifyConfigured, setSpotifyConfigured] = useState<boolean | null>(null);
+  const [errors, setErrors] = useState<Partial<Record<SourceId, string>>>({});
   const [nonce, setNonce] = useState(0);
   const requestIdRef = useRef(0);
 
@@ -52,6 +56,7 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
 
     if (!active) {
       setBySource({});
+      setErrors({});
       setLoading(false);
       setHasLoaded(false);
       setLinkMode(false);
@@ -110,9 +115,14 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
         // each provider lands on its own so a slow one never blocks the others
         await Promise.all(
           providers.map(async ([source, pending]) => {
-            const tracks = await pending.catch(() => [] as ExternalTrack[]);
+            let failure: string | undefined;
+            const tracks = await pending.catch((err: unknown) => {
+              failure = describeStreamError(err instanceof Error ? err.message : String(err), 200);
+              return [] as ExternalTrack[];
+            });
             if (!isCurrent()) return;
             setBySource((prev) => ({ ...prev, [source]: tracks }));
+            setErrors((prev) => ({ ...prev, [source]: failure }));
           }),
         );
         if (!isCurrent()) return;
@@ -135,5 +145,5 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
 
   const retry = useCallback(() => setNonce((n) => n + 1), []);
 
-  return { tracks, loading, hasLoaded, linkMode, playlistTitle, spotifyConfigured, retry };
+  return { tracks, loading, hasLoaded, linkMode, playlistTitle, spotifyConfigured, errors, retry };
 }

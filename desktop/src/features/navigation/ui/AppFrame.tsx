@@ -1033,6 +1033,32 @@ export default function AppFrame({ children }: AppFrameProps) {
                   (sourceFilter === "spotify" || /spotify/i.test(searchQuery)) ? (
                     <SpotifySetup onSaved={externalSearch.retry} />
                   ) : null}
+                  {externalSearchEnabled && !externalSearch.loading && externalSearch.hasLoaded
+                    ? (() => {
+                        const failed = (Object.entries(externalSearch.errors) as [keyof typeof SOURCES, string | undefined][]).filter(
+                          ([source, message]) => message && (sourceFilter === "all" || sourceFilter === source),
+                        );
+                        if (!failed.length) return null;
+                        return (
+                          <div
+                            className="flex items-start gap-[8px] px-[16px] pb-[8px] text-[12px] text-[#ff6b6b] shrink-0"
+                            style={{ fontFamily: "var(--font-inter), sans-serif" }}
+                            data-prevent-drag
+                          >
+                            <span className="min-w-0 flex-1 break-words">
+                              {failed.map(([source, message]) => `${SOURCES[source].label}: ${message}`).join(" · ")}
+                            </span>
+                            <button
+                              type="button"
+                              className="cursor-pointer rounded-[6px] border-0 bg-border-alpha-14 px-[10px] py-[5px] text-[12px] text-text-secondary hover:text-text-primary shrink-0"
+                              onClick={externalSearch.retry}
+                            >
+                              Tentar de novo
+                            </button>
+                          </div>
+                        );
+                      })()
+                    : null}
                   {externalSearchEnabled && sourceFilter === "youtube" ? <YoutubeAccountBar onChanged={externalSearch.retry} /> : null}
                   {externalSearchEnabled && externalSearch.spotifyConfigured === true && sourceFilter === "spotify" ? (
                     <SpotifyAccountBar
