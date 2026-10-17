@@ -44,7 +44,15 @@ function YoutubeAccountBar({ onChanged }: { onChanged?: () => void }) {
     return stopPolling;
   }, [refresh, poll]);
 
-  if (!window.linerElectron?.youtubeAuthStatus || !status) return null;
+  // an old build (or a stale preload) has no login bridge: say so instead of silently hiding the button
+  if (!window.linerElectron?.youtubeAuthStatus) {
+    return (
+      <div className="px-[16px] pb-[8px] text-[12px] text-text-tertiary shrink-0" style={FONT} data-prevent-drag>
+        Esta versão do app não tem o login do YouTube. Troque a pasta pelo zip mais novo, rode pnpm install e reinicie o pnpm dev.
+      </div>
+    );
+  }
+  if (!status) return null;
 
   if (status.loggedIn) {
     return (
