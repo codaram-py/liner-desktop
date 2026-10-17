@@ -151,3 +151,56 @@ describe("resolve", () => {
     expect(calls.filter((c) => c.url.includes("accounts.spotify.com"))).toHaveLength(2);
   });
 });
+
+describe("embed pages (no credentials)", () => {
+  const page = (entity: unknown) =>
+    `<html><head></head><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps: { state: { data: { entity } } } } })}</script></body></html>`;
+
+  const playlistEntity = {
+    type: "playlist",
+    name: "Treino",
+    coverArt: { sources: [{ url: "https://i/640", width: 640 }, { url: "https://i/300", width: 300 }, { url: "https://i/64", width: 64 }] },
+    trackList: [
+      { uri: `spotify:track:${ID}`, title: "Song A", subtitle: "Artist One, Artist Two", duration: 200000, isExplicit: true },
+      { uri: `spotify:track:${ID2}`, title: "Song B", subtitle: "Artist Three", duration: 180000 },
+      { uri: "spotify:track:zzzzzzzzzzzzzzzzzzzzzz", title: "No length", subtitle: "x", duration: 0 },
+    ],
+  };
+
+  it("opens playlist links without credentials", async () => {
+    creds = {};
+    respond = (url) => {
+      expect(url.pathname).toBe(`/embed/playlist/${ID}`);
+      return new Response(page(playlistEntity));
+    };
+    const res = await make().resolve(`https://open.spotify.com/playlist/${ID}`);
+    expect(res).toMatchObject({ configured: false, kind: "playlist", title: "Treino" });
+    expect(res.tracks).toEqual([
+      { id: ID, title: "Song A", artists: "Artist One, Artist Two", coverUrl: "https://i/300", durationMs: 200000, explicit: true },
+      { id: ID2, title: "Song B", artists: "Artist Three", coverUrl: "https://i/300", durationMs: 180000, explicit: false },
+    ]);
+  });
+
+  it("opens single track links", async () => {
+    creds = {};
+    respond = () =>
+      new Response(
+        page({ type: "track", name: "Solo", artists: [{ name: "A" }, { name: "B" }], duration: 123000, visualIdentity: { image: [{ url: "https://v/300", maxWidth: 300 }] } }),
+      );
+    const res = await make().resolve(`https://open.spotify.com/track/${ID}`);
+    expect(res).toMatchObject({ configured: false, kind: "track" });
+    expect(res.tracks).toEqual([{ id: ID, title: "Solo", artists: "A, B", coverUrl: "https://v/300", durationMs: 123000, explicit: false }]);
+  });
+
+  it("returns nothing, not an error, when the page has an unknown shape or fails", async () => {
+    creds = {};
+    respond = () => new Response("<html>no data here</html>");
+    expect(await make().resolve(`https://open.spotify.com/track/${ID}`)).toEqual({ configured: false, kind: "none", tracks: [] });
+
+    respond = () => new Response(page({ type: "playlist", name: "Empty", trackList: [] }));
+    expect(await make().resolve(`https://open.spotify.com/playlist/${ID}`)).toEqual({ configured: false, kind: "none", tracks: [] });
+
+    respond = () => new Response("blocked", { status: 403 });
+    expect(await make().resolve(`https://open.spotify.com/album/${ID}`)).toEqual({ configured: false, kind: "none", tracks: [] });
+  });
+});

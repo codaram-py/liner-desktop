@@ -160,6 +160,11 @@ describe("spotify", () => {
     expect(res?.tracks.map((t) => t.id)).toEqual(["sp:a", "sp:b"]);
     expect(new Set(res?.tracks.map((t) => t.collection)).size).toBe(1);
 
+    // no credentials but the public embed page still delivered the tracks: the link opens
+    bridge.spotifyResolve.mockResolvedValue({ configured: false, kind: "playlist", title: "Open list", tracks: [dto("c")] });
+    expect((await resolveExternalLink(url))?.tracks.map((t) => t.id)).toEqual(["sp:c"]);
+
+    // no credentials and nothing found: that is when the setup hint is needed
     bridge.spotifyResolve.mockResolvedValue({ configured: false, kind: "none", tracks: [] });
     await expect(resolveExternalLink(url)).rejects.toBeInstanceOf(SpotifyNotConfiguredError);
   });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   SpotifyNotConfiguredError,
   isLinkLike,
@@ -27,6 +27,8 @@ export interface UseExternalSearchResult {
   playlistTitle?: string;
   // null until the first spotify answer, false when config.json has no client id / secret yet
   spotifyConfigured: boolean | null;
+  // runs the current search again (after saving spotify credentials)
+  retry: () => void;
 }
 
 type BySource = Partial<Record<SourceId, ExternalTrack[]>>;
@@ -39,6 +41,7 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
   const [linkMode, setLinkMode] = useState(false);
   const [playlistTitle, setPlaylistTitle] = useState<string | undefined>();
   const [spotifyConfigured, setSpotifyConfigured] = useState<boolean | null>(null);
+  const [nonce, setNonce] = useState(0);
   const requestIdRef = useRef(0);
 
   const trimmed = query.trim();
@@ -126,9 +129,11 @@ export function useExternalSearch(query: string, options: UseExternalSearchOptio
       clearTimeout(timer);
       controller.abort();
     };
-  }, [active, debounceMs, trimmed]);
+  }, [active, debounceMs, trimmed, nonce]);
 
   const tracks = useMemo(() => SOURCE_ORDER.flatMap((source) => bySource[source] ?? []), [bySource]);
 
-  return { tracks, loading, hasLoaded, linkMode, playlistTitle, spotifyConfigured };
+  const retry = useCallback(() => setNonce((n) => n + 1), []);
+
+  return { tracks, loading, hasLoaded, linkMode, playlistTitle, spotifyConfigured, retry };
 }

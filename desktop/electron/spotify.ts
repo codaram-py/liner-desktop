@@ -50,6 +50,50 @@ export function parseSpotifyUrl(raw: string): { kind: SpotifyKind; id: string } 
   return null;
 }
 
+const EMBED_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+
+function pickImage(images: any[] | undefined, key: "width" | "maxWidth"): string {
+  if (!images?.length) return "";
+  // closest to 300px, the size a row needs
+  return [...images].sort((a, b) => Math.abs((a[key] ?? 300) - 300) - Math.abs((b[key] ?? 300) - 300))[0]?.url ?? "";
+}
+
+// public embed pages (open.spotify.com/embed/...) carry the entity as json, no login or credentials involved.
+// the format is not documented, so everything is read defensively and an unknown shape just means "nothing found"
+export function parseEmbedPage(html: string, kind: SpotifyKind, id: string): { title: string; tracks: SpotifyTrackDto[] } | null {
+  const raw = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/.exec(html)?.[1];
+  if (!raw) return null;
+  let entity: any;
+  try {
+    entity = JSON.parse(raw)?.props?.pageProps?.state?.data?.entity;
+  } catch {
+    return null;
+  }
+  if (!entity) return null;
+
+  const cover = pickImage(entity.coverArt?.sources, "width") || pickImage(entity.visualIdentity?.image, "maxWidth");
+  const title = String(entity.name ?? entity.title ?? "Spotify");
+  const make = (trackId: string, name: unknown, artists: unknown, duration: unknown, explicit: unknown, image = cover): SpotifyTrackDto | null => {
+    const durationMs = Number(duration) || 0;
+    if (!trackId || !name || durationMs <= 0) return null;
+    return { id: trackId, title: String(name), artists: String(artists ?? "").replace(/ /g, " ").trim(), coverUrl: image, durationMs, explicit: !!explicit };
+  };
+
+  if (kind === "track") {
+    const artists = Array.isArray(entity.artists) ? entity.artists.map((a: any) => a?.name).filter(Boolean).join(", ") : entity.subtitle;
+    const track = make(id, entity.name ?? entity.title, artists, entity.duration ?? entity.durationMs, entity.isExplicit);
+    return track ? { title, tracks: [track] } : null;
+  }
+
+  const list: any[] = Array.isArray(entity.trackList) ? entity.trackList : [];
+  const tracks = list
+    .map((item) => make(String(item?.uri ?? "").split(":").pop() ?? "", item?.title, item?.subtitle, item?.duration, item?.isExplicit))
+    .filter((t): t is SpotifyTrackDto => t !== null)
+    .slice(0, LIST_LIMIT);
+  return tracks.length ? { title, tracks } : null;
+}
+
 export function createSpotify(deps: SpotifyDeps) {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const now = deps.now ?? Date.now;
@@ -124,7 +168,23 @@ export function createSpotify(deps: SpotifyDeps) {
     const parsed = parseSpotifyUrl(raw);
     const creds = credentials();
     if (!parsed) return { configured: !!creds, kind: "none", tracks: [] };
-    if (!creds) return { configured: false, kind: "none", tracks: [] };
+
+    if (!creds) {
+      // no credentials: links still open through the public embed page
+      try {
+        const res = await fetchImpl(`https://open.spotify.com/embed/${parsed.kind}/${parsed.id}`, {
+          headers: { "user-agent": EMBED_USER_AGENT, "accept-language": "en-US,en;q=0.9" },
+          signal: AbortSignal.timeout(12_000),
+        });
+        const page = res.ok ? parseEmbedPage(await res.text(), parsed.kind, parsed.id) : null;
+        if (page) {
+          return parsed.kind === "track"
+            ? { configured: false, kind: "track", tracks: page.tracks }
+            : { configured: false, kind: parsed.kind, title: page.title, tracks: page.tracks };
+        }
+      } catch {}
+      return { configured: false, kind: "none", tracks: [] };
+    }
 
     if (parsed.kind === "track") {
       const track = toTrack(await api<any>(creds, `/tracks/${parsed.id}`));

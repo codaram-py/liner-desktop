@@ -173,8 +173,11 @@ export async function resolveSpotifyLink(input: string): Promise<LinkResult | nu
   const bridge = window.linerElectron;
   if (!bridge?.spotifyResolve || !isSpotifyLike(input)) return null;
   const res = await bridge.spotifyResolve(input);
-  if (!res.configured) throw new SpotifyNotConfiguredError();
-  if (res.kind === "none" || res.tracks.length === 0) return null;
+  // links open without credentials (public embed page), only a link that found nothing needs them
+  if (res.kind === "none" || res.tracks.length === 0) {
+    if (!res.configured) throw new SpotifyNotConfiguredError();
+    return null;
+  }
   const collection = res.kind === "album" || res.kind === "playlist" ? `sp-${res.kind}:${input.trim()}` : undefined;
   return {
     tracks: res.tracks.map((dto) => ({ ...fromSpotifyDto(dto), collection })),

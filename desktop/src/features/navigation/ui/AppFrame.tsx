@@ -42,6 +42,7 @@ import SearchResultsList from "@/features/search/ui/SearchResultsList";
 import {
   SOURCES,
   SourceFilterBar,
+  SpotifySetup,
   buildSearchResults,
   useExternalSearch,
   type SourceFilter,
@@ -1027,13 +1028,7 @@ export default function AppFrame({ children }: AppFrameProps) {
                   {externalSearchEnabled &&
                   externalSearch.spotifyConfigured === false &&
                   (sourceFilter === "spotify" || /spotify/i.test(searchQuery)) ? (
-                    <div
-                      className="px-[16px] pb-[6px] text-[12px] text-text-tertiary shrink-0 leading-snug"
-                      style={{ fontFamily: "var(--font-inter), sans-serif" }}
-                    >
-                      Spotify precisa do seu Client ID e Client Secret (grátis em developer.spotify.com/dashboard).
-                      Coloque em ~/Liner/config.json: {`"spotify": { "clientId": "...", "clientSecret": "..." }`}
-                    </div>
+                    <SpotifySetup onSaved={externalSearch.retry} />
                   ) : null}
                   {externalSearchEnabled && externalSearch.linkMode ? (
                     <div

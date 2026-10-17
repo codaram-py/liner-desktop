@@ -142,7 +142,7 @@ Search merges the Liner catalog with providers that run locally in the app:
 
 Deezer and Apple Music do not give out full streams without a paid, DRM protected session, so only their official 30s clips are played from them directly. Those clips are listed under the **Prévia** chip at the right end of the source filter, never mixed into the normal results.
 
-**Spotify setup** (two minutes, free): create an app at <https://developer.spotify.com/dashboard>, then add its credentials to `~/Liner/config.json`. The app picks the change up on the next search, no restart needed. Saving your profile never touches this key.
+**Spotify**: pasted track / album / playlist links open without any setup (public embed pages). Searching needs a free app of your own, because the Spotify API has no anonymous search. Open the Spotify chip in the search, paste the Client ID and Secret from <https://developer.spotify.com/dashboard> into the form and save. They end up in `~/Liner/config.json` (you can also edit it by hand), are picked up on the next search and are never touched when your profile is saved.
 
 ```json
 {

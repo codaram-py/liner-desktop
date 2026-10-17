@@ -5,3 +5,4 @@ export { resolveExternalPlayback, type ExternalTrack } from "./providers";
 export { useExternalSearch } from "./hooks/useExternalSearch";
 export { default as SourceBadges } from "./ui/SourceBadges";
 export { default as SourceFilterBar } from "./ui/SourceFilterBar";
+export { default as SpotifySetup } from "./ui/SpotifySetup";
