@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { MainNetResult } from "./netdiag";
+import type { YoutubeResolveResult, YoutubeStreamDto, YoutubeTrackDto } from "./youtube";
 
 export interface DeeplinkTarget {
   type: "artist" | "album" | "playlist" | "track";
@@ -119,6 +120,9 @@ export interface LinerElectronApi {
   updateOverlaySettings: (settings: any) => void;
   onOverlaySettingsChanged: (cb: (settings: any) => void) => () => void;
   onOverlayVisibility: (cb: (visible: boolean) => void) => () => void;
+  youtubeSearch: (query: string, limit?: number) => Promise<YoutubeTrackDto[]>;
+  youtubeResolve: (input: string) => Promise<YoutubeResolveResult>;
+  youtubeStream: (videoId: string) => Promise<YoutubeStreamDto>;
 }
 
 const isHyprland = Boolean(
@@ -298,6 +302,9 @@ const api: LinerElectronApi = {
       ipcRenderer.removeListener("overlay:visibility", listener);
     };
   },
+  youtubeSearch: (query, limit) => ipcRenderer.invoke("youtube:search", query, limit),
+  youtubeResolve: (input) => ipcRenderer.invoke("youtube:resolve", input),
+  youtubeStream: (videoId) => ipcRenderer.invoke("youtube:stream", videoId),
 };
 
 contextBridge.exposeInMainWorld("linerElectron", api);

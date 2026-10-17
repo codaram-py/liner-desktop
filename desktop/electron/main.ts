@@ -35,6 +35,7 @@ import { TouchBarManager } from "./touchbar.js";
 import { OverlayManager } from "./overlay.js";
 import { BundleManager } from "./bundle-manager.js";
 import { createSleepBlocker } from "./sleep-blocker.js";
+import { getYoutubeStream, resolveYoutubeInput, searchYoutube } from "./youtube.js";
 
 // root error handling for main process
 process.on("uncaughtException", (error) => {
@@ -307,6 +308,13 @@ if (!gotTheLock) {
     ipcMain.handle("app:get-version", () => {
       return app.getVersion();
     });
+
+    // local youtube provider (search / url resolve / audio stream), no liner backend involved
+    ipcMain.handle("youtube:search", (_event, query: string, limit?: number) =>
+      searchYoutube(String(query ?? ""), typeof limit === "number" ? limit : 20),
+    );
+    ipcMain.handle("youtube:resolve", (_event, input: string) => resolveYoutubeInput(String(input ?? "")));
+    ipcMain.handle("youtube:stream", (_event, videoId: string) => getYoutubeStream(String(videoId ?? "")));
 
     ipcMain.handle("app:set-icon", async (_event, dataUrl: string) => {
       if (!mainWindow || !dataUrl) return;

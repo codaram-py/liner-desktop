@@ -39,6 +39,12 @@ import {
   usePlayerStore,
 } from "@/features/player";
 import SearchResultsList from "@/features/search/ui/SearchResultsList";
+import {
+  SourceFilterBar,
+  buildSearchResults,
+  useExternalSearch,
+  type SourceFilter,
+} from "@/features/sources";
 import { SearchHistoryList, useSearchHistoryStore } from "@/features/search";
 import { useTranslation } from "@/languages";
 import { useTheme } from "next-themes";
@@ -205,6 +211,7 @@ export default function AppFrame({ children }: AppFrameProps) {
   };
 
   const [activeFilter, setActiveFilter] = useState<SearchFilterKey>("all");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const isAllSearchFilter = activeFilter === "all";
   const isTrackSearchFilter = activeFilter === "tracks";
   const isArtistSearchFilter = activeFilter === "artists";
@@ -344,7 +351,7 @@ export default function AppFrame({ children }: AppFrameProps) {
     debounceMs: 320,
   });
 
-  const searchResults = useMemo(() => {
+  const linerSearchResults = useMemo(() => {
     if (isAllSearchFilter) {
       return allResults.map((item: any) => {
         const coverUrl = item.cover
@@ -452,7 +459,30 @@ export default function AppFrame({ children }: AppFrameProps) {
     playlistResults,
   ]);
 
-  const searchLoading = isAllSearchFilter
+  // youtube / deezer / apple music run locally next to the liner catalog, only on tabs that list tracks
+  const externalSearchEnabled = searchOpen && (isAllSearchFilter || isTrackSearchFilter);
+  const externalSearch = useExternalSearch(searchQuery, {
+    enabled: externalSearchEnabled,
+    debounceMs: 320,
+  });
+
+  const searchResults = useMemo(() => {
+    if (!externalSearchEnabled) return linerSearchResults;
+    return buildSearchResults({
+      // a pasted youtube link is not a catalog query, hide the (meaningless) liner matches for it
+      linerItems: externalSearch.linkMode ? [] : linerSearchResults,
+      external: externalSearch.tracks,
+      sourceFilter: externalSearch.linkMode ? "all" : sourceFilter,
+    });
+  }, [
+    externalSearchEnabled,
+    externalSearch.linkMode,
+    externalSearch.tracks,
+    linerSearchResults,
+    sourceFilter,
+  ]);
+
+  const linerSearchLoading = isAllSearchFilter
     ? allLoading
     : isTrackSearchFilter
       ? trackLoading
@@ -462,7 +492,7 @@ export default function AppFrame({ children }: AppFrameProps) {
           ? albumLoading
           : playlistLoading;
 
-  const searchHasLoaded = isAllSearchFilter
+  const linerSearchHasLoaded = isAllSearchFilter
     ? allHasLoaded
     : isTrackSearchFilter
       ? trackHasLoaded
@@ -471,6 +501,10 @@ export default function AppFrame({ children }: AppFrameProps) {
         : isAlbumSearchFilter
           ? albumHasLoaded
           : playlistHasLoaded;
+
+  const searchLoading = linerSearchLoading || (externalSearchEnabled && externalSearch.loading);
+  const searchHasLoaded =
+    linerSearchHasLoaded && (!externalSearchEnabled || externalSearch.hasLoaded);
 
   const isSearchEmpty =
     searchQuery.trim().length >= 2 &&
@@ -576,14 +610,22 @@ export default function AppFrame({ children }: AppFrameProps) {
         durationMs,
         itemData: track,
       });
+      // tracks from a pasted youtube playlist keep the whole playlist as the queue
+      const collectionQueue = track.collection
+        ? searchResults.filter(
+            (row: any) => row._type === "track" && row.collection === track.collection,
+          )
+        : [];
       void playerEngine.playTrack(
         track,
-        [track],
-        `${track.title} Radio`,
+        collectionQueue.length > 0 ? collectionQueue : [track],
+        track.collection
+          ? (externalSearch.playlistTitle ?? "YouTube")
+          : `${track.title} Radio`,
         track.coverUrl,
       );
     },
-    [addHistoryItem],
+    [addHistoryItem, searchResults, externalSearch.playlistTitle],
   );
 
   const handleNavigateItem = useCallback(
@@ -972,6 +1014,24 @@ export default function AppFrame({ children }: AppFrameProps) {
                       );
                     })}
                   </div>
+
+                  {externalSearchEnabled && !externalSearch.linkMode ? (
+                    <SourceFilterBar
+                      value={sourceFilter}
+                      onChange={setSourceFilter}
+                      allLabel={t("common.all")}
+                    />
+                  ) : null}
+                  {externalSearchEnabled && externalSearch.linkMode ? (
+                    <div
+                      className="px-[16px] pb-[6px] text-[12px] text-text-tertiary shrink-0"
+                      style={{ fontFamily: "var(--font-inter), sans-serif" }}
+                    >
+                      {externalSearch.playlistTitle
+                        ? `YouTube · ${externalSearch.playlistTitle}`
+                        : "YouTube"}
+                    </div>
+                  ) : null}
 
                   <div className="relative flex-1 min-h-0 overflow-hidden">
                     <AnimatePresence mode="wait">

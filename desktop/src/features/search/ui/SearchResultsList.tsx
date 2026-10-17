@@ -2,6 +2,7 @@ import { memo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import SongCardWithMenu from "@/features/player/ui/SongCardWithMenu";
 import { useTranslation } from "@/languages";
+import { SourceBadges, applyVariant } from "@/features/sources";
 
 export interface SearchResultsListProps {
   items: any[];
@@ -108,6 +109,16 @@ export const SearchResultsList = memo(function SearchResultsList({
                 duration={durationStr}
                 durationMs={durationMs}
                 searchType={it._type}
+                sourceSlot={
+                  it._type === "track" && it.source ? (
+                    <SourceBadges
+                      source={it.source}
+                      previewOnly={it.previewOnly}
+                      variants={it.variants}
+                      onPickVariant={(variant) => onPlayFromSearch(applyVariant(it, variant))}
+                    />
+                  ) : undefined
+                }
                 totalTracks={it.totalTracks ?? it.total_tracks}
                 onPlay={
                   it._type === "track"

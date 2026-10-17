@@ -36,6 +36,8 @@ export interface SongCardProps {
   icon?: React.ReactNode;
   showReorderHandle?: boolean;
   onGrabStart?: (e: React.PointerEvent<HTMLDivElement>) => void;
+  // trailing badges (source pill, "+N" other sources), rendered right before the duration
+  sourceSlot?: React.ReactNode;
 }
 
 function SongCard({
@@ -64,6 +66,7 @@ function SongCard({
   icon,
   showReorderHandle,
   onGrabStart,
+  sourceSlot,
 }: SongCardProps) {
   const { t } = useTranslation();
   const [imageLoaded, setImageLoaded] = useState(() => isCoverReady(coverUrl));
@@ -227,6 +230,7 @@ function SongCard({
       </div>
 
       <div className="flex items-center shrink-0 ml-[16px] gap-[16px]">
+        {sourceSlot}
         {releaseDate && (
           <span
             className="text-[14px] text-text-tertiary"

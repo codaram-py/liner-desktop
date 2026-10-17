@@ -17,6 +17,7 @@ import {
 } from "@/shared/api";
 import { toClientTrack } from "@/shared/api/track";
 import { log } from "@/shared/utils/logger";
+import { isExternalTrackId } from "@/features/sources/types";
 import {
   parseRawLyrics,
   useLyricsStore,
@@ -216,6 +217,8 @@ class PlaybackTelemetryTracker {
   }
 
   private sendEvent(payload: RecordPlaybackEventRequest) {
+    // the liner backend does not know youtube / deezer / apple music ids
+    if (isExternalTrackId(payload.trackId)) return;
     void api.recordPlaybackEvent(payload).catch((err) => {
       log(
         "yellow",
@@ -517,6 +520,8 @@ class PlayerEngine {
     if (playerRuntime) {
       void playerRuntime.loadAndPlay(track);
     }
+
+    if (isExternalTrackId(track.id)) return;
 
     try {
       const response = await api.getRadio(track.id, { k: 20, wave_id: waveId });
@@ -961,6 +966,7 @@ class PlayerEngine {
   ): Promise<void> {
     const currentState = usePlayerStore.getState();
     if (!currentState.autoplaySimilar) return;
+    if (isExternalTrackId(seedTrackId)) return;
 
     const historyIds = currentState.queue.map((track) => track.id);
     // keep paginating the same wave instance across queue generations
@@ -1048,7 +1054,7 @@ class PlayerEngine {
   }
 
   private async prefetchLyrics(trackId: string): Promise<void> {
-    if (!trackId) return;
+    if (!trackId || isExternalTrackId(trackId)) return;
 
     if (lyricsCache.has(trackId)) return;
     if (this.inFlightLyricsPrefetches.has(trackId)) {
@@ -1130,6 +1136,12 @@ class PlayerEngine {
     }
 
     const trackId = track.id;
+    if (isExternalTrackId(trackId)) {
+      this.lyricsAbort?.abort();
+      this.currentLyricsTrackId = trackId;
+      lyricsStore.reset();
+      return;
+    }
     if (
       this.currentLyricsTrackId === trackId &&
       lyricsStore.currentLyricsTrackId === trackId

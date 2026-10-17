@@ -110,6 +110,20 @@ bun run dev
 
 ---
 
+## Sources
+
+Search merges the Liner catalog with providers that run locally in the app:
+
+| Source | Playback | Notes |
+|---|---|---|
+| YouTube | full track | search, pasted video / playlist links and bare video ids, resolved in the Electron main process (`electron/youtube.ts`, `youtubei.js`) |
+| Deezer | 30s preview | public search endpoint |
+| Apple Music | 30s preview | public iTunes search endpoint |
+
+Each result row ends with a source badge. A `+N` chip means the same song exists on N other sources, click it to pick one. The chip row under the search tabs filters by source.
+
+---
+
 ## Testing
 
 ```bash

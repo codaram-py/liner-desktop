@@ -1,4 +1,6 @@
 import { usePlayerStore } from "../store/playerStore";
+import { resolveExternalPlayback } from "@/features/sources/providers";
+import { isExternalTrackId } from "@/features/sources/types";
 import { api, mediaUrl, ApiError } from "@/shared/api";
 import { getClientVisitorData } from "@/shared/api/visitorSession";
 import { log } from "@/shared/utils/logger";
@@ -489,6 +491,8 @@ export class PlayerRuntime {
   public async preloadTrack(track: Track): Promise<void> {
     if (this.currentTrackId === track.id) return;
     if (this.preloadingTrackId === track.id) return;
+    // external streams are signed per request and can be hours long, never prefetch them
+    if (isExternalTrackId(track.id)) return;
 
     const cached = await linerDb.getAudio(track.id);
     if (cached) return;
@@ -687,11 +691,10 @@ export class PlayerRuntime {
         return;
       }
 
-      const session = await api.createPlaybackSession(
-        track.id,
-        undefined,
-        controller.signal,
-      );
+      // youtube / deezer / apple music ids resolve locally, everything else goes through the liner backend
+      const session =
+        (await resolveExternalPlayback(track.id, controller.signal)) ??
+        (await api.createPlaybackSession(track.id, undefined, controller.signal));
       this.ttfbMs = Math.round(performance.now() - this.loadStartTime);
 
       if (epoch !== this.loadEpoch || controller.signal.aborted) {
@@ -746,7 +749,9 @@ export class PlayerRuntime {
         `stream attached: ${streamCodec} ${streamBitrate} bps (${track.title})`,
       );
 
-      this.cacheOncePlaying(track, url, streamMimeType, bgCacheController.signal);
+      if (!isExternalTrackId(track.id)) {
+        this.cacheOncePlaying(track, url, streamMimeType, bgCacheController.signal);
+      }
 
       if (this.audio.readyState < 3) {
         await new Promise<void>((resolve) => {
