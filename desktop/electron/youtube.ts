@@ -1,5 +1,6 @@
-import { Innertube } from "youtubei.js";
+import { Constants, Innertube } from "youtubei.js";
 import { parseYoutubeInput } from "./youtubeInput.js";
+import { startYoutubeProxy, withRange, type Upstream, type YoutubeProxy } from "./youtubeProxy.js";
 
 export interface YoutubeTrackDto {
   id: string;
@@ -22,14 +23,25 @@ export interface YoutubeStreamDto {
   expiresAt?: string;
 }
 
-// order matters: the first two return plain googlevideo urls without po tokens at the time of writing,
-// web is the last resort. FILL: reorder here if youtube starts rejecting one of them
+// order matters: android_vr and ios usually hand out plain googlevideo urls, tv and web are the last resorts.
+// every candidate is probed with a real ranged request, a client whose urls answer 403 is skipped instead of reaching the player
 const STREAM_CLIENTS = ["ANDROID_VR", "IOS", "TV", "WEB"] as const;
-const STREAM_TTL_MS = 10 * 60 * 1000;
+const UPSTREAM_TTL_MS = 10 * 60 * 1000;
 const PLAYLIST_LIMIT = 100;
 
+type StreamClient = (typeof STREAM_CLIENTS)[number];
+
+interface ResolvedUpstream extends Upstream {
+  at: number;
+  client: StreamClient;
+  codec: "opus" | "aac";
+  bitrate: number;
+  expiresAt?: string;
+}
+
+const log = (message: string) => console.log(`\x1b[44;37m youtube \x1b[0m ${message}`);
+
 let clientPromise: Promise<Innertube> | null = null;
-const streamCache = new Map<string, { at: number; stream: YoutubeStreamDto }>();
 
 function getClient(): Promise<Innertube> {
   if (!clientPromise) {
@@ -120,46 +132,119 @@ export async function resolveYoutubeInput(raw: string): Promise<YoutubeResolveRe
   return { kind: "playlist", title: playlist.info?.title ?? "YouTube", tracks };
 }
 
-export async function getYoutubeStream(videoId: string): Promise<YoutubeStreamDto> {
-  const cached = streamCache.get(videoId);
-  if (cached && Date.now() - cached.at < STREAM_TTL_MS) return cached.stream;
+// the web client has no user agent in the library constants, any current desktop chrome string works for it
+const WEB_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
 
-  const yt = await getClient();
-  let lastError: unknown = new Error("no playable audio format");
+function userAgentFor(client: StreamClient): string {
+  const clients = Constants.CLIENTS as unknown as Record<string, { USER_AGENT?: string }>;
+  return clients[client]?.USER_AGENT ?? WEB_USER_AGENT;
+}
 
-  for (const client of STREAM_CLIENTS) {
-    try {
-      const info = await yt.getInfo(videoId, { client });
-      const status = info.playability_status?.status;
-      if (status && status !== "OK") {
-        lastError = new Error(info.playability_status?.reason || status);
-        continue;
-      }
+const upstreams = new Map<string, ResolvedUpstream>();
+const inflight = new Map<string, Promise<ResolvedUpstream>>();
+let proxyPromise: Promise<YoutubeProxy> | null = null;
 
-      let format;
-      try {
-        format = info.chooseFormat({ type: "audio", quality: "best", format: "mp4" });
-      } catch {
-        format = info.chooseFormat({ type: "audio", quality: "best" });
-      }
+function getProxy(): Promise<YoutubeProxy> {
+  if (!proxyPromise) {
+    proxyPromise = startYoutubeProxy({
+      getUpstream: resolveUpstream,
+      invalidate: (id) => upstreams.delete(id),
+      log,
+    }).catch((err) => {
+      proxyPromise = null;
+      throw err;
+    });
+  }
+  return proxyPromise;
+}
 
-      const url = await format.decipher(yt.session.player);
-      if (!url) continue;
+async function probe(url: string, userAgent: string, headers: Record<string, string>): Promise<string | null> {
+  try {
+    const res = await fetch(withRange(url, 0, 1, "probeprobeprobe00"), {
+      headers: { ...headers, "user-agent": userAgent },
+      signal: AbortSignal.timeout(8000),
+    });
+    await res.body?.cancel().catch(() => {});
+    return res.ok ? null : `HTTP ${res.status}`;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
 
-      const mimeType = (format.mime_type ?? "audio/mp4").split(";")[0]!;
-      const stream: YoutubeStreamDto = {
-        url,
-        mimeType,
-        codec: mimeType.includes("webm") || /opus/i.test(format.mime_type ?? "") ? "opus" : "aac",
-        bitrate: format.bitrate ?? 128000,
-        expiresAt: info.streaming_data?.expires?.toISOString(),
-      };
-      streamCache.set(videoId, { at: Date.now(), stream });
-      return stream;
-    } catch (err) {
-      lastError = err;
-    }
+async function resolveClient(yt: Innertube, videoId: string, client: StreamClient): Promise<ResolvedUpstream> {
+  const info = await yt.getInfo(videoId, { client });
+  const status = info.playability_status?.status;
+  if (status && status !== "OK") throw new Error(info.playability_status?.reason || status);
+
+  let format;
+  try {
+    format = info.chooseFormat({ type: "audio", quality: "best", format: "mp4" });
+  } catch {
+    format = info.chooseFormat({ type: "audio", quality: "best" });
   }
 
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  const url = await format.decipher(yt.session.player);
+  if (!url) throw new Error("format has no url");
+
+  const contentLength = Number(format.content_length ?? new URL(url).searchParams.get("clen"));
+  if (!Number.isFinite(contentLength) || contentLength <= 0) throw new Error("unknown content length");
+
+  const headers = { ...(Constants.STREAM_HEADERS as Record<string, string>) };
+  const userAgent = userAgentFor(client);
+  const failure = await probe(url, userAgent, headers);
+  if (failure) throw new Error(`probe failed: ${failure}`);
+
+  const mimeType = (format.mime_type ?? "audio/mp4").split(";")[0]!;
+  return {
+    url,
+    contentLength,
+    mimeType,
+    userAgent,
+    headers,
+    at: Date.now(),
+    client,
+    codec: mimeType.includes("webm") || /opus/i.test(format.mime_type ?? "") ? "opus" : "aac",
+    bitrate: format.bitrate ?? 128000,
+    expiresAt: info.streaming_data?.expires?.toISOString(),
+  };
+}
+
+async function resolveUpstream(videoId: string): Promise<ResolvedUpstream> {
+  const cached = upstreams.get(videoId);
+  if (cached && Date.now() - cached.at < UPSTREAM_TTL_MS) return cached;
+  const pending = inflight.get(videoId);
+  if (pending) return pending;
+
+  const run = (async () => {
+    const yt = await getClient();
+    const errors: string[] = [];
+    for (const client of STREAM_CLIENTS) {
+      try {
+        const resolved = await resolveClient(yt, videoId, client);
+        log(`${videoId} ok via ${client} (${resolved.mimeType}, ${resolved.contentLength} bytes)`);
+        upstreams.set(videoId, resolved);
+        return resolved;
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        log(`${videoId} ${client} failed: ${reason}`);
+        errors.push(`${client}: ${reason}`);
+      }
+    }
+    throw new Error(`no playable audio stream (${errors.join("; ")})`);
+  })().finally(() => inflight.delete(videoId));
+
+  inflight.set(videoId, run);
+  return run;
+}
+
+export async function getYoutubeStream(videoId: string): Promise<YoutubeStreamDto> {
+  const [upstream, proxy] = await Promise.all([resolveUpstream(videoId), getProxy()]);
+  return {
+    url: proxy.urlFor(videoId),
+    mimeType: upstream.mimeType,
+    codec: upstream.codec,
+    bitrate: upstream.bitrate,
+    expiresAt: upstream.expiresAt,
+  };
 }

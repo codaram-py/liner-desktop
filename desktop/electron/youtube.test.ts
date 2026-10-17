@@ -1,8 +1,10 @@
+// @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fakeFormat = (mime: string, url = "https://rr1.googlevideo.com/videoplayback?x=1") => ({
   mime_type: mime,
   bitrate: 130000,
+  content_length: 400,
   decipher: vi.fn(async () => url),
 });
 
@@ -45,7 +47,21 @@ const fakeYt = {
   }),
 };
 
-vi.mock("youtubei.js", () => ({ Innertube: { create: vi.fn(async () => fakeYt) } }));
+vi.mock("youtubei.js", () => ({
+  Innertube: { create: vi.fn(async () => fakeYt) },
+  Constants: {
+    CLIENTS: { IOS: { USER_AGENT: "ios-ua" }, ANDROID_VR: { USER_AGENT: "vr-ua" }, TV: { USER_AGENT: "tv-ua" }, WEB: {} },
+    STREAM_HEADERS: { origin: "https://www.youtube.com" },
+  },
+}));
+
+// googlevideo is faked, loopback (the proxy) goes through the real fetch
+const realFetch = globalThis.fetch;
+const googlevideo = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>();
+vi.stubGlobal("fetch", (input: any, init?: RequestInit) => {
+  const url = String(input);
+  return url.startsWith("https://rr1.googlevideo.com") ? googlevideo(url, init) : realFetch(input, init);
+});
 
 import { getYoutubeStream, resolveYoutubeInput, searchYoutube } from "./youtube";
 
@@ -88,27 +104,55 @@ describe("resolveYoutubeInput", () => {
 });
 
 describe("getYoutubeStream", () => {
-  it("falls through clients until one yields an audio url", async () => {
-    state.infoByClient.ANDROID_VR = new Error("LOGIN_REQUIRED");
-    state.infoByClient.IOS = { playability_status: { status: "UNPLAYABLE", reason: "blocked" } };
+  const BYTES = Buffer.from(Array.from({ length: 400 }, (_, n) => n % 200));
+  const slice = (url: string) => {
+    const [a, b] = new URL(url).searchParams.get("range")!.split("-").map(Number);
+    return new Response(BYTES.subarray(a, b! + 1), { status: 200, headers: { "content-type": "audio/mp4" } });
+  };
+
+  beforeEach(() => {
+    googlevideo.mockReset();
+    googlevideo.mockImplementation(async (url) => slice(url));
+  });
+
+  it("skips a client whose urls 403 on the probe and plays through the local proxy", async () => {
+    // the failure from the field: ios hands out a url that looks fine and answers 403
+    state.infoByClient.ANDROID_VR = {
+      playability_status: { status: "OK" },
+      chooseFormat: vi.fn(() => fakeFormat('audio/mp4; codecs="mp4a.40.2"', "https://rr1.googlevideo.com/videoplayback?c=VR")),
+    };
+    state.infoByClient.IOS = new Error("LOGIN_REQUIRED");
     state.infoByClient.TV = {
       playability_status: { status: "OK" },
       streaming_data: { expires: new Date("2030-01-01T00:00:00Z") },
-      chooseFormat: vi.fn(() => fakeFormat('audio/mp4; codecs="mp4a.40.2"')),
+      chooseFormat: vi.fn(() => fakeFormat('audio/mp4; codecs="mp4a.40.2"', "https://rr1.googlevideo.com/videoplayback?c=TV")),
     };
+    googlevideo.mockImplementation(async (url) => (url.includes("c=VR") ? new Response("forbidden", { status: 403 }) : slice(url)));
 
     const stream = await getYoutubeStream("fallbackvid");
+
     expect(state.clients).toEqual(["ANDROID_VR", "IOS", "TV"]);
+    expect(googlevideo.mock.calls[0]![0]).toContain("range=0-1");
+    expect((googlevideo.mock.calls[0]![1]!.headers as Record<string, string>)["user-agent"]).toBe("vr-ua");
     expect(stream).toMatchObject({
-      url: "https://rr1.googlevideo.com/videoplayback?x=1",
       mimeType: "audio/mp4",
       codec: "aac",
       bitrate: 130000,
       expiresAt: "2030-01-01T00:00:00.000Z",
     });
+    expect(stream.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/yt\/fallbackvid\?k=/);
+
+    // what the <audio> element does: a ranged GET against the proxy url
+    const res = await realFetch(stream.url, { headers: { range: "bytes=10-59" } });
+    expect(res.status).toBe(206);
+    expect(Buffer.from(await res.arrayBuffer()).equals(BYTES.subarray(10, 60))).toBe(true);
+    const last = googlevideo.mock.calls.at(-1)!;
+    expect(last[0]).toContain("c=TV");
+    expect(last[0]).toContain("range=10-59");
+    expect((last[1]!.headers as Record<string, string>)["user-agent"]).toBe("tv-ua");
   });
 
-  it("prefers mp4 but accepts webm/opus when mp4 is missing, and caches the result", async () => {
+  it("prefers mp4 but accepts webm/opus when mp4 is missing, and reuses the resolved stream", async () => {
     const chooseFormat = vi
       .fn()
       .mockImplementationOnce(() => {
@@ -121,12 +165,12 @@ describe("getYoutubeStream", () => {
     expect(first).toMatchObject({ mimeType: "audio/webm", codec: "opus" });
 
     const second = await getYoutubeStream("webmvideo01");
-    expect(second).toBe(first);
+    expect(second.url).toBe(first.url);
     expect(state.clients).toEqual(["ANDROID_VR"]);
   });
 
-  it("throws the last error when no client works", async () => {
+  it("reports every client's reason when none works", async () => {
     for (const c of ["ANDROID_VR", "IOS", "TV", "WEB"]) state.infoByClient[c] = new Error(`${c} failed`);
-    await expect(getYoutubeStream("deadvideo01")).rejects.toThrow("WEB failed");
+    await expect(getYoutubeStream("deadvideo01")).rejects.toThrow(/ANDROID_VR: ANDROID_VR failed.*WEB: WEB failed/);
   });
 });
