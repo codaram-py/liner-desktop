@@ -134,6 +134,15 @@ describe("splitYoutubeTitle", () => {
     });
   });
 
+  it("flips 'Song - Artist' uploads using the channel name", () => {
+    expect(splitYoutubeTitle("Meu HD cheio de CP - DJ Lucicleide", "DJ Lucicleide")).toEqual({
+      title: "Meu HD cheio de CP",
+      artists: "DJ Lucicleide",
+    });
+    // a channel that matches neither side keeps the usual "Artist - Song" reading
+    expect(splitYoutubeTitle("Some Artist - Some Song", "Random Uploads")).toEqual({ artists: "Some Artist", title: "Some Song" });
+  });
+
   it("falls back to the channel name", () => {
     expect(splitYoutubeTitle("lofi hip hop mix", "Lofi Girl")).toEqual({ title: "lofi hip hop mix", artists: "Lofi Girl" });
   });

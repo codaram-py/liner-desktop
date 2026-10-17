@@ -8,11 +8,15 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 let calls: string[] = [];
 let handler: (url: URL) => Response | Promise<Response>;
 
+const realFetch = globalThis.fetch;
+
 beforeEach(() => {
   calls = [];
   handler = () => json({}, 404);
-  vi.stubGlobal("fetch", async (input: any) => {
+  vi.stubGlobal("fetch", async (input: any, init?: RequestInit) => {
     const url = new URL(String(input));
+    // the hls proxy listens on loopback, those calls are real
+    if (url.hostname === "127.0.0.1") return realFetch(input, init);
     calls.push(url.pathname + url.search);
     if (url.host === "soundcloud.com") {
       return new Response('<html><script src="https://a-v2.sndcdn.com/assets/0-abc.js"></script><script src="https://a-v2.sndcdn.com/assets/1-def.js"></script></html>');
@@ -125,12 +129,45 @@ describe("getSoundcloudStream", () => {
     expect(await getSoundcloudStream("555")).toMatchObject({ url: "https://cf-media.sndcdn.com/abc.mp3?sig=1", mimeType: "audio/mpeg" });
   });
 
-  it("explains when only hls exists and rejects bad ids", async () => {
-    handler = (url) =>
-      url.pathname === "/tracks/555"
-        ? json(trackWith([{ url: "https://x/hls", format: { protocol: "hls", mime_type: "audio/mpeg" } }]))
-        : json({}, 404);
-    await expect(getSoundcloudStream("555")).rejects.toThrow(/no progressive stream.*hls/);
+  it("falls back to an hls transcoding through the stitching proxy when there is no progressive one", async () => {
+    handler = (url) => {
+      if (url.pathname === "/tracks/555") {
+        return json(trackWith([
+          { url: "https://api-v2.soundcloud.com/media/555/hls-opus", format: { protocol: "hls", mime_type: 'audio/ogg; codecs="opus"' } },
+          { url: "https://api-v2.soundcloud.com/media/555/hls-mp3", format: { protocol: "hls", mime_type: "audio/mpeg" } },
+        ]));
+      }
+      if (url.pathname.endsWith("/hls-mp3")) return json({ url: "https://playback.example/pl.m3u8?sig=1" });
+      if (url.pathname === "/pl.m3u8") return new Response("#EXTM3U\n#EXTINF:5,\nhttps://playback.example/s0.mp3\n#EXTINF:5,\nhttps://playback.example/s1.mp3\n#EXT-X-ENDLIST");
+      if (url.pathname === "/s0.mp3") return new Response(Buffer.from("AAAA"));
+      if (url.pathname === "/s1.mp3") return new Response(Buffer.from("BBBB"));
+      return json({}, 404);
+    };
+
+    const stream = await getSoundcloudStream("555");
+    expect(stream.mimeType).toBe("audio/mpeg");
+    expect(stream.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/hls\//);
+    expect(await (await fetch(stream.url)).text()).toBe("AAAABBBB");
+  });
+
+  it("tries the next transcoding when one is unusable and reports every reason when none works", async () => {
+    handler = (url) => {
+      if (url.pathname === "/tracks/555") {
+        return json(trackWith([
+          { url: "https://api-v2.soundcloud.com/media/555/progressive", format: { protocol: "progressive", mime_type: "audio/mpeg" } },
+          { url: "https://api-v2.soundcloud.com/media/555/hls-mp3", format: { protocol: "hls", mime_type: "audio/mpeg" } },
+        ]));
+      }
+      if (url.pathname.endsWith("/progressive")) return json({}, 500);
+      if (url.pathname.endsWith("/hls-mp3")) return json({ url: "https://playback.example/pl.m3u8" });
+      return new Response("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nlow.m3u8");
+    };
+    await expect(getSoundcloudStream("555")).rejects.toThrow(/progressive\/audio\/mpeg: .*responded 500.*hls\/audio\/mpeg: .*master playlists/);
+  });
+
+  it("explains when there is nothing to play and rejects bad ids", async () => {
+    handler = (url) => (url.pathname === "/tracks/555" ? json(trackWith([])) : json({}, 404));
+    await expect(getSoundcloudStream("555")).rejects.toThrow(/no playable stream/);
     await expect(getSoundcloudStream("../etc")).rejects.toThrow(/invalid/);
   });
 });

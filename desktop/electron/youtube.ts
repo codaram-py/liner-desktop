@@ -23,9 +23,10 @@ export interface YoutubeStreamDto {
   expiresAt?: string;
 }
 
-// order matters: android_vr and ios usually hand out plain googlevideo urls, tv and web are the last resorts.
+// order matters: clients that usually hand out plain googlevideo urls first, the ones that need a po token last.
 // every candidate is probed with a real ranged request, a client whose urls answer 403 is skipped instead of reaching the player
-const STREAM_CLIENTS = ["ANDROID_VR", "IOS", "TV", "WEB"] as const;
+const STREAM_CLIENTS = ["ANDROID_VR", "TV_SIMPLY", "TV_EMBEDDED", "WEB_EMBEDDED", "TV", "ANDROID", "IOS", "WEB"] as const;
+const CLIENT_TIMEOUT_MS = 12_000;
 const UPSTREAM_TTL_MS = 10 * 60 * 1000;
 const PLAYLIST_LIMIT = 100;
 
@@ -221,7 +222,10 @@ async function resolveUpstream(videoId: string): Promise<ResolvedUpstream> {
     const errors: string[] = [];
     for (const client of STREAM_CLIENTS) {
       try {
-        const resolved = await resolveClient(yt, videoId, client);
+        const resolved = await Promise.race([
+          resolveClient(yt, videoId, client),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timed out after ${CLIENT_TIMEOUT_MS / 1000}s`)), CLIENT_TIMEOUT_MS)),
+        ]);
         log(`${videoId} ok via ${client} (${resolved.mimeType}, ${resolved.contentLength} bytes)`);
         upstreams.set(videoId, resolved);
         return resolved;

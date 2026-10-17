@@ -18,6 +18,7 @@ import {
 import { toClientTrack } from "@/shared/api/track";
 import { log } from "@/shared/utils/logger";
 import { isExternalTrackId } from "@/features/sources/types";
+import { describeStreamError } from "@/features/sources/streamError";
 import { isLocalMode } from "@/shared/local/mode";
 import { rememberTracks } from "@/shared/local/trackRegistry";
 import {
@@ -933,8 +934,11 @@ class PlayerEngine {
 
     console.error("[PlaybackError]", info.trackId, info.message);
     log("yellow", "playback", `"${track.title}" failed (${info.message}) — skipping to next`);
+    const label = track.artists ? `${track.title} — ${track.artists}` : track.title;
+    // for tracks from the local providers the real reason is what the user needs to read (or paste back)
+    const reason = isExternalTrackId(track.id) ? describeStreamError(info.message) : "";
     showToast(translate("player.track_unavailable_title"), "error", {
-      description: track.artists ? `${track.title} — ${track.artists}` : track.title,
+      description: reason ? `${label} · ${reason}` : label,
     });
     void this.skipNext(false);
   }

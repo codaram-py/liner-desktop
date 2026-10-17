@@ -50,7 +50,7 @@ const fakeYt = {
 vi.mock("youtubei.js", () => ({
   Innertube: { create: vi.fn(async () => fakeYt) },
   Constants: {
-    CLIENTS: { IOS: { USER_AGENT: "ios-ua" }, ANDROID_VR: { USER_AGENT: "vr-ua" }, TV: { USER_AGENT: "tv-ua" }, WEB: {} },
+    CLIENTS: { IOS: { USER_AGENT: "ios-ua" }, ANDROID_VR: { USER_AGENT: "vr-ua" }, TV_SIMPLY: { USER_AGENT: "tvs-ua" }, WEB: {} },
     STREAM_HEADERS: { origin: "https://www.youtube.com" },
   },
 }));
@@ -121,17 +121,16 @@ describe("getYoutubeStream", () => {
       playability_status: { status: "OK" },
       chooseFormat: vi.fn(() => fakeFormat('audio/mp4; codecs="mp4a.40.2"', "https://rr1.googlevideo.com/videoplayback?c=VR")),
     };
-    state.infoByClient.IOS = new Error("LOGIN_REQUIRED");
-    state.infoByClient.TV = {
+    state.infoByClient.TV_SIMPLY = {
       playability_status: { status: "OK" },
       streaming_data: { expires: new Date("2030-01-01T00:00:00Z") },
-      chooseFormat: vi.fn(() => fakeFormat('audio/mp4; codecs="mp4a.40.2"', "https://rr1.googlevideo.com/videoplayback?c=TV")),
+      chooseFormat: vi.fn(() => fakeFormat('audio/mp4; codecs="mp4a.40.2"', "https://rr1.googlevideo.com/videoplayback?c=TVS")),
     };
     googlevideo.mockImplementation(async (url) => (url.includes("c=VR") ? new Response("forbidden", { status: 403 }) : slice(url)));
 
     const stream = await getYoutubeStream("fallbackvid");
 
-    expect(state.clients).toEqual(["ANDROID_VR", "IOS", "TV"]);
+    expect(state.clients).toEqual(["ANDROID_VR", "TV_SIMPLY"]);
     expect(googlevideo.mock.calls[0]![0]).toContain("range=0-1");
     expect((googlevideo.mock.calls[0]![1]!.headers as Record<string, string>)["user-agent"]).toBe("vr-ua");
     expect(stream).toMatchObject({
@@ -147,9 +146,9 @@ describe("getYoutubeStream", () => {
     expect(res.status).toBe(206);
     expect(Buffer.from(await res.arrayBuffer()).equals(BYTES.subarray(10, 60))).toBe(true);
     const last = googlevideo.mock.calls.at(-1)!;
-    expect(last[0]).toContain("c=TV");
+    expect(last[0]).toContain("c=TVS");
     expect(last[0]).toContain("range=10-59");
-    expect((last[1]!.headers as Record<string, string>)["user-agent"]).toBe("tv-ua");
+    expect((last[1]!.headers as Record<string, string>)["user-agent"]).toBe("tvs-ua");
   });
 
   it("prefers mp4 but accepts webm/opus when mp4 is missing, and reuses the resolved stream", async () => {
@@ -170,7 +169,7 @@ describe("getYoutubeStream", () => {
   });
 
   it("reports every client's reason when none works", async () => {
-    for (const c of ["ANDROID_VR", "IOS", "TV", "WEB"]) state.infoByClient[c] = new Error(`${c} failed`);
+    for (const c of ["ANDROID_VR", "TV_SIMPLY", "TV_EMBEDDED", "WEB_EMBEDDED", "TV", "ANDROID", "IOS", "WEB"]) state.infoByClient[c] = new Error(`${c} failed`);
     await expect(getYoutubeStream("deadvideo01")).rejects.toThrow(/ANDROID_VR: ANDROID_VR failed.*WEB: WEB failed/);
   });
 });

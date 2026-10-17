@@ -36,6 +36,7 @@ import { OverlayManager } from "./overlay.js";
 import { BundleManager } from "./bundle-manager.js";
 import { createSleepBlocker } from "./sleep-blocker.js";
 import { getYoutubeStream, resolveYoutubeInput, searchYoutube } from "./youtube.js";
+import { withOpenCors } from "./cors.js";
 import { getSoundcloudStream, resolveSoundcloudUrl, searchSoundcloud } from "./soundcloud.js";
 import { LOCAL_DATA_KINDS, loadLocalData, resolveDataDir, saveLocalData, type LocalDataKind } from "./localData.js";
 
@@ -358,11 +359,7 @@ if (!gotTheLock) {
     });
 
     session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-      const responseHeaders = { ...(details.responseHeaders || {}) };
-      responseHeaders["access-control-allow-origin"] = ["*"];
-      responseHeaders["access-control-allow-headers"] = ["*"];
-      responseHeaders["access-control-allow-methods"] = ["GET, HEAD, OPTIONS"];
-      callback({ responseHeaders });
+      callback(withOpenCors({ responseHeaders: details.responseHeaders, statusLine: details.statusLine }));
     });
 
     let lastSavedExportPath: string | null = null;

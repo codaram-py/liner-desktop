@@ -1,3 +1,5 @@
+import { parsePlaylist, startHlsProxy, type HlsProxy } from "./hlsStitch.js";
+
 export interface SoundcloudTrackDto {
   id: string;
   title: string;
@@ -141,32 +143,78 @@ export async function resolveSoundcloudUrl(raw: string): Promise<SoundcloudResol
   return { kind: "none", tracks: [] };
 }
 
-// progressive mp3 is a plain file the audio element can seek in, hls only exists for some uploads and is not supported
+let hlsProxyPromise: Promise<HlsProxy> | null = null;
+
+function getHlsProxy(): Promise<HlsProxy> {
+  if (!hlsProxyPromise) {
+    hlsProxyPromise = startHlsProxy({ log }).catch((err) => {
+      hlsProxyPromise = null;
+      throw err;
+    });
+  }
+  return hlsProxyPromise;
+}
+
+const mimeOf = (t: any): string => String(t.format?.mime_type ?? "audio/mpeg").split(";")[0]!.trim();
+
+// plain mp3 files are best (seekable, no stitching). uploads without one come as hls, the plain mp3 flavour first
+// because it is the cheapest to play back, then fmp4 (aac), then ogg
+function rankTranscodings(transcodings: any[]): any[] {
+  const hlsOrder = ["audio/mpeg", "audio/mp4", "audio/ogg"];
+  const progressive = transcodings.filter((t) => t.format?.protocol === "progressive");
+  const hls = transcodings
+    .filter((t) => t.format?.protocol === "hls")
+    .sort((a, b) => hlsOrder.indexOf(mimeOf(a)) - hlsOrder.indexOf(mimeOf(b)));
+  return [...progressive, ...hls];
+}
+
 export async function getSoundcloudStream(trackId: string): Promise<SoundcloudStreamDto> {
   if (!/^\d+$/.test(trackId)) throw new Error("invalid soundcloud track id");
   const track = await api<any>(`/tracks/${trackId}`);
   if (track.policy === "BLOCK") throw new Error("track is blocked in this region");
 
   const transcodings: any[] = track.media?.transcodings ?? [];
-  const progressive = transcodings.find((t) => t.format?.protocol === "progressive");
-  if (!progressive?.url) {
-    throw new Error(`no progressive stream for this track (${transcodings.map((t) => t.format?.protocol).join(", ") || "none"})`);
+  const candidates = rankTranscodings(transcodings);
+  if (candidates.length === 0) {
+    throw new Error(`no playable stream for this track (${transcodings.map((t) => `${t.format?.protocol}/${mimeOf(t)}`).join(", ") || "no transcodings"})`);
   }
 
   const params: Record<string, string> = {};
   if (track.track_authorization) params.track_authorization = track.track_authorization;
-  const media = await api<{ url?: string }>(progressive.url, params);
-  if (!media.url) throw new Error("soundcloud returned no stream url");
 
-  const probe = await fetch(media.url, { headers: { range: "bytes=0-1" }, signal: AbortSignal.timeout(8000) });
-  await probe.body?.cancel().catch(() => {});
-  if (!probe.ok) throw new Error(`stream probe failed: HTTP ${probe.status}`);
+  const errors: string[] = [];
+  for (const transcoding of candidates) {
+    const label = `${transcoding.format?.protocol}/${mimeOf(transcoding)}`;
+    try {
+      const media = await api<{ url?: string }>(transcoding.url, params);
+      if (!media.url) throw new Error("soundcloud returned no stream url");
 
-  return {
-    url: media.url,
-    mimeType: String(progressive.format?.mime_type ?? "audio/mpeg").split(";")[0]!,
-    // the player only logs this, soundcloud progressive streams are mp3
-    codec: "aac",
-    bitrate: 128000,
-  };
+      if (transcoding.format.protocol === "progressive") {
+        const probe = await fetch(media.url, { headers: { range: "bytes=0-1" }, signal: AbortSignal.timeout(8000) });
+        await probe.body?.cancel().catch(() => {});
+        if (!probe.ok) throw new Error(`stream probe failed: HTTP ${probe.status}`);
+        log(`${trackId} ok via ${label}`);
+        // the player only logs the codec, soundcloud progressive streams are mp3
+        return { url: media.url, mimeType: mimeOf(transcoding), codec: "aac", bitrate: 128000 };
+      }
+
+      // hls: make sure the playlist is something we can stitch before handing the player a proxy url
+      const playlistRes = await fetch(media.url, { signal: AbortSignal.timeout(8000) });
+      if (!playlistRes.ok) throw new Error(`playlist responded HTTP ${playlistRes.status}`);
+      parsePlaylist(await playlistRes.text(), media.url);
+      const proxy = await getHlsProxy();
+      log(`${trackId} ok via ${label}`);
+      return {
+        url: proxy.urlFor({ playlistUrl: media.url, mimeType: mimeOf(transcoding) }),
+        mimeType: mimeOf(transcoding),
+        codec: mimeOf(transcoding) === "audio/ogg" ? "opus" : "aac",
+        bitrate: 128000,
+      };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      log(`${trackId} ${label} failed: ${reason}`);
+      errors.push(`${label}: ${reason}`);
+    }
+  }
+  throw new Error(`no playable soundcloud stream (${errors.join("; ")})`);
 }

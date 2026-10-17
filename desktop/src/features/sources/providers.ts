@@ -2,6 +2,7 @@ import type { PlaybackSessionResponse } from "@/shared/contracts";
 import type { Track } from "@/shared/types";
 import { rememberTrack } from "@/shared/local/trackRegistry";
 import { pickBestYoutubeMatch } from "./matchYoutube";
+import { normalizeArtist } from "./mergeResults";
 import { isPreviewTrackId, makeExternalId, rawExternalId, sourceOfTrackId, type SourceId } from "./types";
 
 export type ExternalTrack = Track & { source: SourceId; previewOnly?: boolean; collection?: string };
@@ -30,12 +31,24 @@ function toExternal(
   return track;
 }
 
-// "Artist - Song (Official Video)" -> { artist: "Artist", title: "Song" }, otherwise keep the channel as artist
+function sameName(a: string, b: string): boolean {
+  return !!a && !!b && (a === b || a.includes(b) || b.includes(a));
+}
+
+// "Artist - Song (Official Video)" -> { artist: "Artist", title: "Song" }, otherwise keep the channel as artist.
+// uploads also come as "Song - Artist", the channel name tells which side is the artist
 export function splitYoutubeTitle(title: string, channel: string): { title: string; artists: string } {
   const cleaned = title.replace(YT_NOISE_RE, "").trim();
   const match = cleaned.match(/^(.{1,80}?)\s+[-–—]\s+(.+)$/);
-  if (match) return { artists: match[1]!.trim(), title: match[2]!.trim() };
-  return { title: cleaned || title, artists: channel };
+  if (!match) return { title: cleaned || title, artists: channel };
+
+  const left = match[1]!.trim();
+  const right = match[2]!.trim();
+  const ch = normalizeArtist(channel);
+  if (sameName(ch, normalizeArtist(right)) && !sameName(ch, normalizeArtist(left))) {
+    return { title: left, artists: right };
+  }
+  return { artists: left, title: right };
 }
 
 // ---- youtube (runs in the electron main process, see electron/youtube.ts) ----

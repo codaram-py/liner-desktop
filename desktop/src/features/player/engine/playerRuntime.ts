@@ -1,6 +1,7 @@
 import { usePlayerStore } from "../store/playerStore";
 import { resolveExternalPlayback } from "@/features/sources/providers";
 import { isExternalTrackId } from "@/features/sources/types";
+import { MAX_BLOB_DURATION_MS, downloadAudioBlob } from "@/features/sources/download";
 import { api, mediaUrl, ApiError } from "@/shared/api";
 import { getClientVisitorData } from "@/shared/api/visitorSession";
 import { log } from "@/shared/utils/logger";
@@ -325,8 +326,12 @@ export class PlayerRuntime {
 
       const message = audioEl.error?.message || "Audio playback error";
       const code = audioEl.error?.code;
-      console.error("[AudioElementError]", this.currentTrackId, code, message, audioEl.src);
-      log("red", "audio", `error (code ${code}): ${message}`);
+      const buffered = audioEl.buffered.length ? audioEl.buffered.end(audioEl.buffered.length - 1).toFixed(1) : "0";
+      const state = `t=${audioEl.currentTime.toFixed(1)}s/${Number.isFinite(audioEl.duration) ? audioEl.duration.toFixed(1) : "?"}s buffered=${buffered}s readyState=${audioEl.readyState} networkState=${audioEl.networkState}`;
+      // the src can be a signed stream url, only the origin goes in the log
+      const srcKind = audioEl.src.startsWith("blob:") ? "blob" : (() => { try { return new URL(audioEl.src).host; } catch { return "?"; } })();
+      console.error("[AudioElementError]", this.currentTrackId, code, message, srcKind, state);
+      log("red", "audio", `error (code ${code}): ${message} [${srcKind}] ${state}`);
 
       const isDecode =
         code === (typeof MediaError !== "undefined" ? MediaError.MEDIA_ERR_DECODE : 3) ||
@@ -732,6 +737,16 @@ export class PlayerRuntime {
       if (this.activeBlobUrl) {
         URL.revokeObjectURL(this.activeBlobUrl);
         this.activeBlobUrl = null;
+      }
+      // local providers: buffer the whole file first so playback never depends on a live connection
+      if (isExternalTrackId(track.id) && (track.durationMs ?? 0) <= MAX_BLOB_DURATION_MS) {
+        const blob = await downloadAudioBlob(url, streamMimeType, controller.signal);
+        if (epoch !== this.loadEpoch || controller.signal.aborted) return;
+        if (blob) {
+          this.activeBlobUrl = URL.createObjectURL(blob);
+          url = this.activeBlobUrl;
+          log("cyan", "playback", `buffered ${Math.round(blob.size / 1024)} KB of "${track.title}" before playing`);
+        }
       }
       this.audio.src = url;
       this.audio.volume = 0;
