@@ -621,9 +621,21 @@ export default function AppFrame({ children }: AppFrameProps) {
             (row: any) => row._type === "track" && row.collection === track.collection,
           )
         : [];
+      // a plain result keeps the rest of the visible results as the queue, so playback continues (and shuffle has
+      // something to shuffle) instead of stopping after this one song
+      const resultsQueue = collectionQueue.length
+        ? []
+        : searchResults
+            .filter((row: any) => row._type === "track" && row.id && !row.previewOnly === !track.previewOnly)
+            .slice(0, 100);
+      const queue = collectionQueue.length
+        ? collectionQueue
+        : resultsQueue.some((row: any) => row.id === track.id)
+          ? resultsQueue
+          : [track];
       void playerEngine.playTrack(
         track,
-        collectionQueue.length > 0 ? collectionQueue : [track],
+        queue,
         track.collection
           ? (externalSearch.playlistTitle ?? "YouTube")
           : `${track.title} Radio`,
