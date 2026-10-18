@@ -60,7 +60,11 @@ let secretCache: ReturnType<typeof createSecureFileCache> | undefined;
 let signedIn = false;
 
 // call once at startup: google login (if any) is kept in <dataDir>/youtube-session.json, encrypted with the os keychain
+// bumped whenever the youtube path changes, printed at startup so a log says which build produced it
+const BUILD_TAG = "yt-2026-10-18-capture-diag";
+
 export function configureYoutube(opts: { dataDir: string; box: SecretBox }): void {
+  log(`build ${BUILD_TAG}`);
   secretCache = createSecureFileCache(`${opts.dataDir.replace(/[\\/]+$/, "")}/youtube-session.json`, opts.box);
   anonPromise = null;
   authPromise = null;
