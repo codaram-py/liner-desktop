@@ -51,6 +51,32 @@ export interface CaptureResult extends CapturedAudio {
 }
 
 const PARTITION = "persist:youtube-capture";
+
+// what the page looked like when no audio request came, so a failure says why (bot wall, consent page, player error)
+async function describePage(win: { isDestroyed(): boolean; webContents: { executeJavaScript(code: string, gesture?: boolean): Promise<unknown> } }): Promise<string> {
+  if (win.isDestroyed()) return "window closed";
+  try {
+    const state = await win.webContents.executeJavaScript(
+      `(() => {
+        const text = document.body?.innerText ?? "";
+        const video = document.querySelector("video");
+        return JSON.stringify({
+          title: document.title.slice(0, 60),
+          url: location.href.slice(0, 90),
+          playerError: (document.querySelector(".ytp-error-content-wrap-reason, .ytp-error")?.innerText ?? "").slice(0, 120) || undefined,
+          botWall: /not a bot|confirm you.re not/i.test(text) || undefined,
+          consent: /consent\./i.test(location.href) || /before you continue/i.test(text) || undefined,
+          video: !!video,
+          paused: video ? video.paused : undefined,
+        });
+      })()`,
+      true,
+    );
+    return String(state);
+  } catch {
+    return "page could not be inspected";
+  }
+}
 let queue: Promise<unknown> = Promise.resolve();
 
 // one capture at a time: the request listener is per session and a request does not say which video it is for
@@ -71,10 +97,17 @@ async function capture(videoId: string, options: CaptureOptions): Promise<Captur
     .set({ url: "https://www.youtube.com", name: "SOCS", value: "CAI", domain: ".youtube.com", path: "/", secure: true, expirationDate: Math.floor(Date.now() / 1000) + 31536000 })
     .catch(() => {});
 
+  // a window with show:false counts as a hidden page and youtube's player may never start in it. this one is shown,
+  // but far off screen, transparent, out of the taskbar and unfocusable: the page sees a visible tab, the user sees nothing
   const win = new BrowserWindow({
     show: false,
+    x: -32000,
+    y: -32000,
     width: 960,
     height: 600,
+    skipTaskbar: true,
+    focusable: false,
+    frame: false,
     webPreferences: {
       partition: PARTITION,
       backgroundThrottling: false,
@@ -85,10 +118,19 @@ async function capture(videoId: string, options: CaptureOptions): Promise<Captur
     },
   });
   win.webContents.setAudioMuted(true);
+  try {
+    win.setOpacity(0);
+  } catch {
+    // not supported on every platform, the offscreen position already hides it
+  }
+  win.showInactive();
 
   try {
     const found = await new Promise<CapturedAudio>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`the web player did not request any audio within ${(options.timeoutMs ?? 25_000) / 1000}s`)), options.timeoutMs ?? 25_000);
+      const timeoutMs = options.timeoutMs ?? 25_000;
+      const timer = setTimeout(() => {
+        void describePage(win).then((state) => reject(new Error(`the web player did not request any audio within ${timeoutMs / 1000}s (${state})`)));
+      }, timeoutMs);
       ses.webRequest.onBeforeRequest({ urls: patterns }, (details, callback) => {
         callback({});
         const hit = pickAudioRequest(details.url, options.hostCheck);
@@ -103,9 +145,18 @@ async function capture(videoId: string, options: CaptureOptions): Promise<Captur
           reject(new Error(`watch page failed to load: ${description}`));
         }
       });
-      // some layouts need a nudge even with autoplay allowed
+      // some layouts need a nudge even with autoplay allowed; run it a few times, the player mounts after load
       win.webContents.on("did-finish-load", () => {
-        void win.webContents.executeJavaScript("document.querySelector('video')?.play?.()", true).catch(() => {});
+        const nudge = () =>
+          win.isDestroyed()
+            ? undefined
+            : void win.webContents
+                .executeJavaScript(
+                  "(() => { const v = document.querySelector('video'); if (v) { v.muted = true; v.play?.(); } document.querySelector('.ytp-large-play-button')?.click(); })()",
+                  true,
+                )
+                .catch(() => {});
+        for (const delay of [0, 1500, 4000, 8000]) setTimeout(nudge, delay);
       });
       win.loadURL(watchUrl).catch((err) => {
         clearTimeout(timer);

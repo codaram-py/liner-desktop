@@ -382,7 +382,8 @@ async function resolveUpstream(videoId: string): Promise<ResolvedUpstream> {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       log(`${videoId} BROWSER failed: ${reason}`);
-      errors.push(`BROWSER: ${reason}`);
+      // first, it is the most informative entry and the toast only shows the start of the message
+      errors.unshift(`BROWSER: ${reason}`);
     }
     throw new Error(`no playable audio stream (${errors.join("; ")})`);
   })().finally(() => inflight.delete(videoId));
