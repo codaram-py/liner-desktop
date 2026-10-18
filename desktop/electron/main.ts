@@ -59,6 +59,10 @@ app.commandLine.appendSwitch("ignore-gpu-blocklist");
 app.commandLine.appendSwitch("enable-native-gpu-memory-buffers");
 // forces resilient http/1.1 to prevent chromium err_http2_ping_failed on dropped network frames
 app.commandLine.appendSwitch("disable-http2");
+// the hidden youtube player window sits off screen; without this chromium on windows treats such a window as occluded
+// (page hidden, player never starts)
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 

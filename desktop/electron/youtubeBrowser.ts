@@ -78,6 +78,13 @@ async function describePage(win: { isDestroyed(): boolean; webContents: { execut
           consent: /consent\./i.test(location.href) || /before you continue/i.test(text) || undefined,
           video: !!video,
           paused: video ? video.paused : undefined,
+          playability: (() => {
+            const p = window.ytInitialPlayerResponse?.playabilityStatus;
+            return p ? [p.status, (p.reason || "").slice(0, 80)].filter(Boolean).join(": ") : undefined;
+          })(),
+          state: document.getElementById("movie_player")?.getPlayerState?.(),
+          ad: document.getElementById("movie_player")?.classList.contains("ad-showing") || undefined,
+          visibility: document.visibilityState,
         });
       })()`,
       true,
@@ -185,8 +192,28 @@ async function capture(videoId: string, options: CaptureOptions): Promise<Captur
         const hit = pickAudioRequest(details.url, options.hostCheck);
         if (hit) done(() => resolve(hit));
       });
+      // the check passed, the player page is back: put the window away again and give the player its usual time
+      const conceal = () => {
+        if (!revealed || win.isDestroyed()) return;
+        revealed = false;
+        win.hide();
+        win.setSkipTaskbar(true);
+        win.setFocusable(false);
+        win.setPosition(-32000, -32000);
+        try {
+          win.setOpacity(0);
+        } catch {
+          // see above
+        }
+        win.showInactive();
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          void describePage(win).then((state) => done(() => reject(new Error(`the web player did not request any audio within ${timeoutMs / 1000}s after the check (${state})`))));
+        }, timeoutMs);
+      };
       const onNavigate = (_event: unknown, url: string) => {
         if (isHumanCheck(url)) reveal();
+        else conceal();
       };
       win.webContents.on("did-navigate", onNavigate);
       win.webContents.on("did-redirect-navigation", ((_event: unknown, url: string) => onNavigate(_event, url)) as never);
@@ -201,11 +228,20 @@ async function capture(videoId: string, options: CaptureOptions): Promise<Captur
             ? undefined
             : void win.webContents
                 .executeJavaScript(
-                  "(() => { const v = document.querySelector('video'); if (v) { v.muted = true; v.play?.(); } document.querySelector('.ytp-large-play-button')?.click(); })()",
+                  `(() => {
+                    const player = document.getElementById("movie_player");
+                    try { player?.mute?.(); player?.playVideo?.(); } catch {}
+                    const v = document.querySelector("video");
+                    if (v) { v.muted = true; v.play?.(); }
+                    document.querySelector(".ytp-large-play-button")?.click();
+                    // an ad in front of the song: skip it as soon as youtube allows
+                    document.querySelector(".ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button")?.click();
+                  })()`,
                   true,
                 )
                 .catch(() => {});
-        for (const delay of [0, 1500, 4000, 8000]) setTimeout(nudge, delay);
+        // keeps nudging: ads need a few seconds before they can be skipped, the player may also mount late
+        for (let delay = 0; delay <= 24_000; delay += delay < 6000 ? 1500 : 3000) setTimeout(nudge, delay);
       });
       win.loadURL(watchUrl).catch((err) => done(() => reject(err)));
     });

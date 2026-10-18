@@ -61,7 +61,7 @@ let signedIn = false;
 
 // call once at startup: google login (if any) is kept in <dataDir>/youtube-session.json, encrypted with the os keychain
 // bumped whenever the youtube path changes, printed at startup so a log says which build produced it
-const BUILD_TAG = "yt-2026-10-18-human-check";
+const BUILD_TAG = "yt-2026-10-18-autoplay";
 
 export function configureYoutube(opts: { dataDir: string; box: SecretBox }): void {
   log(`build ${BUILD_TAG}`);
