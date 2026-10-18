@@ -3,6 +3,7 @@ import { createSecureFileCache } from "./secureFileCache.js";
 import type { SecretBox } from "./spotifyAuth.js";
 import { createYoutubeLogin, type LoginSession, type YoutubeLoginStatus } from "./youtubeLogin.js";
 import { parseYoutubeInput } from "./youtubeInput.js";
+import { captureAudioUrl } from "./youtubeBrowser.js";
 import { ensureSignatureTimestamp } from "./youtubePlayer.js";
 import { downloadWhole, MAX_BUFFER_BYTES } from "./youtubeDownload.js";
 import { makeCpn, startYoutubeProxy, withRange, type Upstream, type YoutubeProxy } from "./youtubeProxy.js";
@@ -40,7 +41,7 @@ type StreamClient = (typeof STREAM_CLIENTS)[number];
 
 interface ResolvedUpstream extends Upstream {
   at: number;
-  client: StreamClient;
+  client: StreamClient | "BROWSER";
   codec: "opus" | "aac";
   bitrate: number;
   expiresAt?: string;
@@ -243,9 +244,9 @@ function getProxy(): Promise<YoutubeProxy> {
   return proxyPromise;
 }
 
-async function probe(url: string, userAgent: string, headers: Record<string, string>): Promise<string | null> {
+async function probe(url: string, userAgent: string, headers: Record<string, string>, start = 0, end = 1): Promise<string | null> {
   try {
-    const res = await fetch(withRange(url, 0, 1, "probeprobeprobe00"), {
+    const res = await fetch(withRange(url, start, end, "probeprobeprobe00"), {
       headers: { ...headers, "user-agent": userAgent },
       signal: AbortSignal.timeout(8000),
     });
@@ -255,6 +256,9 @@ async function probe(url: string, userAgent: string, headers: Record<string, str
     return err instanceof Error ? err.message : String(err);
   }
 }
+
+// some clients (ios without a po token) answer the first megabyte and 403 everything after it, a 2 byte probe cannot tell
+const PAST_FIRST_CHUNK = 1_200_000;
 
 async function resolveClient(yt: Innertube, videoId: string, client: StreamClient): Promise<ResolvedUpstream> {
   // getBasicInfo = the /player call only. getInfo also fires /next with the default web context, which a signed in
@@ -280,6 +284,10 @@ async function resolveClient(yt: Innertube, videoId: string, client: StreamClien
   const userAgent = userAgentFor(client);
   const failure = await probe(url, userAgent, headers);
   if (failure) throw new Error(`probe failed: ${failure}`);
+  if (contentLength > PAST_FIRST_CHUNK + 1024) {
+    const late = await probe(url, userAgent, headers, PAST_FIRST_CHUNK, PAST_FIRST_CHUNK + 1);
+    if (late) throw new Error(`stream is cut after the first chunk: ${late}`);
+  }
 
   // the player gets the bytes from memory, so a googlevideo 403 on a later range cannot reach it. a client whose
   // url cannot be downloaded whole is rejected here and the next one is tried
@@ -301,6 +309,28 @@ async function resolveClient(yt: Innertube, videoId: string, client: StreamClien
     codec: mimeType.includes("webm") || /opus/i.test(format.mime_type ?? "") ? "opus" : "aac",
     bitrate: format.bitrate ?? 128000,
     expiresAt: info.streaming_data?.expires?.toISOString(),
+  };
+}
+
+// every innertube client refused: play the video in a hidden browser window and take the audio request it makes
+async function resolveViaBrowser(videoId: string): Promise<ResolvedUpstream> {
+  const cap = await captureAudioUrl(videoId);
+  if (cap.contentLength > MAX_BUFFER_BYTES) throw new Error(`file too large to buffer (${cap.contentLength} bytes)`);
+  const buffer = await downloadWhole(
+    { url: cap.url, contentLength: cap.contentLength, userAgent: cap.userAgent, headers: cap.headers },
+    { makeCpn, fetchImpl: cap.fetch },
+  );
+  return {
+    buffer,
+    url: cap.url,
+    contentLength: cap.contentLength,
+    mimeType: cap.mimeType,
+    userAgent: cap.userAgent,
+    headers: cap.headers,
+    at: Date.now(),
+    client: "BROWSER",
+    codec: cap.mimeType.includes("webm") ? "opus" : "aac",
+    bitrate: 128000,
   };
 }
 
@@ -342,6 +372,17 @@ async function resolveUpstream(videoId: string): Promise<ResolvedUpstream> {
         log(`${videoId} ${tag} failed: ${reason}`);
         errors.push(`${tag}: ${reason}`);
       }
+    }
+    try {
+      const resolved = await resolveViaBrowser(videoId);
+      log(`${videoId} ok via BROWSER (${resolved.mimeType}, ${resolved.contentLength} bytes)`);
+      upstreams.set(videoId, resolved);
+      while (upstreams.size > MAX_CACHED) upstreams.delete(upstreams.keys().next().value!);
+      return resolved;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      log(`${videoId} BROWSER failed: ${reason}`);
+      errors.push(`BROWSER: ${reason}`);
     }
     throw new Error(`no playable audio stream (${errors.join("; ")})`);
   })().finally(() => inflight.delete(videoId));

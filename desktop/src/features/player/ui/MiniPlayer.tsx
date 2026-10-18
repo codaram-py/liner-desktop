@@ -28,9 +28,10 @@ import SongCard from "./SongCard";
 import { useTranslation } from "@/languages";
 import { useIsTrackLiked, useLikeTrack, useUnlikeTrack } from "@/features/library/hooks";
 import { usePlayerStore } from "../store/playerStore";
-import { toVolumeGain, toVolumeLevel } from "../engine/volume";
+import { stepVolumeLevel, toVolumeGain, toVolumeLevel } from "../engine/volume";
 import { VolumePicker } from "./VolumePicker";
 import { SpeedPitchPicker } from "./SpeedPitchPicker";
+import { WHEEL_SEEK_IGNORE, WHEEL_SEEK_MIN_INTERVAL_MS, wheelSeekTarget } from "../engine/wheelSeek";
 import { TimelineSlider } from "./TimelineSlider";
 import { useTheme } from "next-themes";
 import { useCoverReady, CoverImage } from "@/features/covers";
@@ -316,6 +317,7 @@ function MiniPlayer({
   const likeMutation = useLikeTrack();
   const unlikeMutation = useUnlikeTrack();
   const togglingRef = useRef(false);
+  const lastWheelSeekRef = useRef(0);
 
   const handleLikeToggle = useCallback(() => {
     if (!currentTrack || togglingRef.current) return;
@@ -576,6 +578,17 @@ function MiniPlayer({
                 }`
         }`}
         style={miniplayerCustomStyle}
+        onWheel={(e) => {
+          // only the empty background: buttons, sliders and the volume / speed pickers keep their own wheel behaviour
+          if ((e.target as Element | null)?.closest?.(WHEEL_SEEK_IGNORE)) return;
+          const now = performance.now();
+          if (now - lastWheelSeekRef.current < WHEEL_SEEK_MIN_INTERVAL_MS) return;
+          const state = usePlayerStore.getState();
+          const target = wheelSeekTarget(e.deltaY, state.positionMs, state.durationMs || state.currentTrack?.durationMs || 0);
+          if (target === null) return;
+          lastWheelSeekRef.current = now;
+          playerEngine.seek(target);
+        }}
         onPointerDown={(e) => {
 
           if (e.button !== 0) return;
@@ -826,10 +839,27 @@ function MiniPlayer({
                   volumeOpen ? "bg-bg-toolbox-active text-text-primary" : ""
                 }`}
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => {
+                // hovering shows the slider, scrolling over the button changes the volume by 5 without a click
+                onMouseEnter={() => {
                   setSpeedOpen(false);
                   onQueueOpenChange?.(false);
-                  setVolumeOpen((prev) => !prev);
+                  setVolumeOpen(true);
+                  clearVolumeAutoCloseTimer();
+                }}
+                onMouseMove={clearVolumeAutoCloseTimer}
+                onMouseLeave={scheduleVolumeAutoClose}
+                onWheel={(e) => {
+                  e.stopPropagation();
+                  const current = toVolumeLevel(usePlayerStore.getState().volume);
+                  playerEngine.setVolume(toVolumeGain(stepVolumeLevel(current, e.deltaY)));
+                  setVolumeOpen(true);
+                  clearVolumeAutoCloseTimer();
+                }}
+                onClick={() => {
+                  // already open from the hover, a click keeps it open instead of flipping it shut
+                  setSpeedOpen(false);
+                  onQueueOpenChange?.(false);
+                  setVolumeOpen(true);
                   scheduleVolumeAutoClose();
                 }}
                 style={{ cursor: "pointer" }}

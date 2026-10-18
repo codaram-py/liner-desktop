@@ -13,3 +13,12 @@ export function toVolumeLevel(gain: number): number {
 export function toVolumeGain(level: number): number {
   return Math.pow(clamp(level), VOLUME_CURVE);
 }
+
+// wheel over the volume button: one notch = 5 points on the 0-100 slider, up raises, down lowers
+export const VOLUME_WHEEL_STEP = 0.05;
+
+export function stepVolumeLevel(level: number, deltaY: number, step = VOLUME_WHEEL_STEP): number {
+  if (!deltaY) return clamp(level);
+  const next = level + (deltaY < 0 ? step : -step);
+  return clamp(Math.round(next * 100) / 100);
+}

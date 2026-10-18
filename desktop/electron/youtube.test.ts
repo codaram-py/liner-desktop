@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const fakeFormat = (mime: string, url = "https://rr1.googlevideo.com/videoplayback?x=1") => ({
+const fakeFormat = (mime: string, url = "https://rr1.googlevideo.com/videoplayback?x=1", length = 400) => ({
   mime_type: mime,
   bitrate: 130000,
-  content_length: 400,
+  content_length: length,
   decipher: vi.fn(async () => url),
 });
 
@@ -209,6 +209,23 @@ describe("getYoutubeStream", () => {
   it("reports every client's reason when none works", async () => {
     for (const c of ["ANDROID_VR", "TV_SIMPLY", "TV_EMBEDDED", "WEB_EMBEDDED", "TV", "ANDROID", "IOS", "WEB"]) state.infoByClient[c] = new Error(`${c} failed`);
     await expect(getYoutubeStream("deadvideo01")).rejects.toThrow(/ANDROID_VR: ANDROID_VR failed.*WEB: WEB failed/);
+  });
+});
+
+describe("stream cut after the first chunk", () => {
+  it("rejects a client whose url answers the start of the file and 403s later (the ios case)", async () => {
+    const big = 3_000_000;
+    state.infoByClient.IOS = {
+      playability_status: { status: "OK" },
+      chooseFormat: vi.fn(() => fakeFormat('audio/mp4; codecs="mp4a.40.2"', "https://rr1.googlevideo.com/videoplayback?c=IOS", big)),
+    };
+    for (const c of ["ANDROID_VR", "TV_SIMPLY", "TV_EMBEDDED", "WEB_EMBEDDED", "TV", "ANDROID", "WEB"]) state.infoByClient[c] = new Error("refused");
+    googlevideo.mockReset();
+    googlevideo.mockImplementation(async (url) => {
+      const start = Number(new URL(url).searchParams.get("range")!.split("-")[0]);
+      return start >= 1_048_576 ? new Response("no", { status: 403 }) : new Response(Buffer.alloc(2));
+    });
+    await expect(getYoutubeStream("cutoffvid01")).rejects.toThrow(/cut after the first chunk/);
   });
 });
 

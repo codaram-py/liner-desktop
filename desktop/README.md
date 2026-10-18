@@ -144,6 +144,10 @@ Deezer and Apple Music do not give out full streams without a paid, DRM protecte
 
 **YouTube login**: when YouTube answers *"Sign in to confirm you're not a bot"* the stream is refused for anonymous clients. Open the YouTube chip in the search and press **Entrar com Google**: the app shows a short code, you type it on <https://www.google.com/device> and approve (the same flow smart TVs use, your password never touches the app). The session is stored in `~/Liner/youtube-session.json`, encrypted with the OS keychain when available, and removed by *Sair*. Tracks are downloaded whole in the main process (chunk size drops 1 MiB → 256 KiB → 64 KiB on 403) and served from memory, so a mid-song 403 cannot cut playback. Use a secondary Google account if you are worried about the account being flagged.
 
+**Last resort, hidden player**: when every client above is refused, the app loads the video's real youtube page in an invisible, muted window and takes the audio request the web player makes (`electron/youtubeBrowser.ts`), then downloads it in the main process. It is slower (a few seconds) and only runs after the faster paths failed. The log line is `ok via BROWSER`.
+
+**Player bar**: scrolling over the empty part of the bar skips ±10s (up = forward). Hovering the volume button opens the slider and scrolling over it changes the volume by 5.
+
 **Spotify**: pasted track / album / playlist links open without any setup (public embed pages). Searching needs your Spotify account, because the Spotify API has no anonymous search:
 
 1. Create a free app at <https://developer.spotify.com/dashboard> and add `http://127.0.0.1:8888/callback` under *Redirect URIs*.
