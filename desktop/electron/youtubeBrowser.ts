@@ -41,6 +41,16 @@ export interface CaptureOptions {
   watchUrl?: (videoId: string) => string;
   urlPatterns?: string[];
   hostCheck?: (host: string) => boolean;
+  // how long the user gets to solve google's "unusual traffic" check once the window is shown
+  humanTimeoutMs?: number;
+  isHumanCheckUrl?: (url: string) => boolean;
+  // called once when the window has to be shown to the user
+  onNeedsHuman?: () => void;
+}
+
+// google's interstitial for traffic it considers automated (a captcha). only a person can pass it
+export function isHumanCheckUrl(url: string): boolean {
+  return /^https?:\/\/([^/]+\.)?google\.[a-z.]+\/sorry\//i.test(url);
 }
 
 export interface CaptureResult extends CapturedAudio {
@@ -107,7 +117,8 @@ async function capture(videoId: string, options: CaptureOptions): Promise<Captur
     height: 600,
     skipTaskbar: true,
     focusable: false,
-    frame: false,
+    title: "Verificação do YouTube",
+    autoHideMenuBar: true,
     webPreferences: {
       partition: PARTITION,
       backgroundThrottling: false,
@@ -128,22 +139,60 @@ async function capture(videoId: string, options: CaptureOptions): Promise<Captur
   try {
     const found = await new Promise<CapturedAudio>((resolve, reject) => {
       const timeoutMs = options.timeoutMs ?? 25_000;
-      const timer = setTimeout(() => {
-        void describePage(win).then((state) => reject(new Error(`the web player did not request any audio within ${timeoutMs / 1000}s (${state})`)));
+      const humanTimeoutMs = options.humanTimeoutMs ?? 180_000;
+      const isHumanCheck = options.isHumanCheckUrl ?? isHumanCheckUrl;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let revealed = false;
+      let settled = false;
+      const done = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        fn();
+      };
+
+      // google wants a person: bring the window forward so the check can be solved. the cookie it sets afterwards
+      // lives in this partition, later songs go through without the window
+      const reveal = () => {
+        if (revealed || win.isDestroyed()) return;
+        revealed = true;
+        options.onNeedsHuman?.();
+        try {
+          win.setOpacity(1);
+        } catch {
+          // see above
+        }
+        win.setFocusable(true);
+        win.setSkipTaskbar(false);
+        win.setSize(560, 760);
+        win.center();
+        win.show();
+        win.focus();
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => done(() => reject(new Error("the Google check was not completed in time"))), humanTimeoutMs);
+      };
+
+      timer = setTimeout(() => {
+        void describePage(win).then((state) => {
+          // the page itself may tell us: a bot wall without a redirect
+          if (!settled && /"botWall":true/.test(state) && !revealed) return reveal();
+          done(() => reject(new Error(`the web player did not request any audio within ${timeoutMs / 1000}s (${state})`)));
+        });
       }, timeoutMs);
+
       ses.webRequest.onBeforeRequest({ urls: patterns }, (details, callback) => {
         callback({});
         const hit = pickAudioRequest(details.url, options.hostCheck);
-        if (hit) {
-          clearTimeout(timer);
-          resolve(hit);
-        }
+        if (hit) done(() => resolve(hit));
       });
+      const onNavigate = (_event: unknown, url: string) => {
+        if (isHumanCheck(url)) reveal();
+      };
+      win.webContents.on("did-navigate", onNavigate);
+      win.webContents.on("did-redirect-navigation", ((_event: unknown, url: string) => onNavigate(_event, url)) as never);
+      win.on("closed", () => done(() => reject(new Error("the verification window was closed"))));
       win.webContents.on("did-fail-load", (_event, code, description, _url, isMainFrame) => {
-        if (isMainFrame && code !== -3) {
-          clearTimeout(timer);
-          reject(new Error(`watch page failed to load: ${description}`));
-        }
+        if (isMainFrame && code !== -3) done(() => reject(new Error(`watch page failed to load: ${description}`)));
       });
       // some layouts need a nudge even with autoplay allowed; run it a few times, the player mounts after load
       win.webContents.on("did-finish-load", () => {
@@ -158,10 +207,7 @@ async function capture(videoId: string, options: CaptureOptions): Promise<Captur
                 .catch(() => {});
         for (const delay of [0, 1500, 4000, 8000]) setTimeout(nudge, delay);
       });
-      win.loadURL(watchUrl).catch((err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
+      win.loadURL(watchUrl).catch((err) => done(() => reject(err)));
     });
 
     const userAgent = ses.getUserAgent();

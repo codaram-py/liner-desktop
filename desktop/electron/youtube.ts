@@ -61,7 +61,7 @@ let signedIn = false;
 
 // call once at startup: google login (if any) is kept in <dataDir>/youtube-session.json, encrypted with the os keychain
 // bumped whenever the youtube path changes, printed at startup so a log says which build produced it
-const BUILD_TAG = "yt-2026-10-18-capture-diag";
+const BUILD_TAG = "yt-2026-10-18-human-check";
 
 export function configureYoutube(opts: { dataDir: string; box: SecretBox }): void {
   log(`build ${BUILD_TAG}`);
@@ -318,7 +318,9 @@ async function resolveClient(yt: Innertube, videoId: string, client: StreamClien
 
 // every innertube client refused: play the video in a hidden browser window and take the audio request it makes
 async function resolveViaBrowser(videoId: string): Promise<ResolvedUpstream> {
-  const cap = await captureAudioUrl(videoId);
+  const cap = await captureAudioUrl(videoId, {
+    onNeedsHuman: () => log("google asks for a human check: a window opened, solve it there (only needed once)"),
+  });
   if (cap.contentLength > MAX_BUFFER_BYTES) throw new Error(`file too large to buffer (${cap.contentLength} bytes)`);
   const buffer = await downloadWhole(
     { url: cap.url, contentLength: cap.contentLength, userAgent: cap.userAgent, headers: cap.headers },

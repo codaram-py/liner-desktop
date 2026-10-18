@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { pickAudioRequest } from "./youtubeBrowser";
+import { isHumanCheckUrl, pickAudioRequest } from "./youtubeBrowser";
 
 const base = "https://rr3---sn-abc.googlevideo.com/videoplayback";
 const q = (params: Record<string, string>) => `${base}?${new URLSearchParams(params)}`;
@@ -26,5 +26,15 @@ describe("pickAudioRequest", () => {
     expect(pickAudioRequest(`https://example.com/videoplayback?mime=audio/mp4&clen=5`)).toBeNull();
     expect(pickAudioRequest("not a url")).toBeNull();
     expect(pickAudioRequest("https://rr1.googlevideo.com/generate_204")).toBeNull();
+  });
+});
+
+describe("isHumanCheckUrl", () => {
+  it("recognises google's unusual traffic interstitial only", () => {
+    expect(isHumanCheckUrl("https://www.google.com/sorry/index?continue=https://www.youtube.com/watch%3Fv%3Dx")).toBe(true);
+    expect(isHumanCheckUrl("https://www.google.com.br/sorry/index?continue=x")).toBe(true);
+    expect(isHumanCheckUrl("https://www.youtube.com/watch?v=abc")).toBe(false);
+    expect(isHumanCheckUrl("https://www.google.com/search?q=sorry")).toBe(false);
+    expect(isHumanCheckUrl("https://evil.example/sorry/index")).toBe(false);
   });
 });
